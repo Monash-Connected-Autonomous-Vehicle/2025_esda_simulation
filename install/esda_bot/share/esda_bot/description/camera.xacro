@@ -4,7 +4,7 @@
     <joint name="camera_joint" type="fixed">
         <parent link="chassis"/>
         <child link="camera_link"/>
-        <origin xyz="0.321 0 0.300" rpy="0 0 0"/> <!--TODO: need to change to our actual camera location. the 0.005 is because the camera has a thickness-->
+        <origin xyz="0.811 0 0.300" rpy="0 0 0"/> <!--TODO: need to change to our actual camera location. the 0.005 is because the camera has a thickness-->
     </joint>
 
     <link name="camera_link">

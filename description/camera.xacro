@@ -4,7 +4,7 @@
     <joint name="camera_joint" type="fixed">
         <parent link="chassis"/>
         <child link="camera_link"/>
-        <origin xyz="0.9835 0 0.315" rpy="0 0 0"/> <!--TODO: need to change to our actual camera location. the 0.005 is because the camera has a thickness-->
+        <origin xyz="0.8 0 0.315" rpy="0 0 0"/> <!--TODO: need to change to our actual camera location. the 0.005 is because the camera has a thickness-->
     </joint>
 
     <link name="camera_link">
@@ -54,7 +54,7 @@
             <camera>
                 <horizontal_fov>1.089</horizontal_fov> <!--Fov is in radians-->
                 <image>
-                    <format>B8G8R8</format> <!--8bit for each Green Blue Red-->
+                    <format>R8G8B8</format> <!--8bit for each Green Blue Red-->
                     <width>640</width>
                     <height>480</height>
                 </image>
@@ -65,8 +65,6 @@
             </camera>
             <plugin name="camera_controller" filename="libgazebo_ros_camera.so">
                 <frame_name>camera_link_optical</frame_name>
-                <min_depth>0.1</min_depth> 
-                <max_depth>100.0</max_depth>
             </plugin>
         </sensor>
     </gazebo>

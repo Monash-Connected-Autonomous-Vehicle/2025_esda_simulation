@@ -19,6 +19,10 @@
         <color rgba="0 0 0 1"/>
     </material>
 
+    <material name="red">
+        <color rgba="1 0 0 1"/>
+    </material>
+
     <!-- BASE LINK -->
 
     <link name="base_link">
@@ -31,14 +35,14 @@
     <joint name="chassis_joint" type="fixed">
         <parent link="base_link"/>
         <child link="chassis"/>
-        <origin xyz="-0.5 0 0"/>    <!-- TODO: change "-0.1" to the distance from the center of two wheels to the back of the bot-->
+        <origin xyz="-0.965423 0 0"/>    <!-- TODO: change "-0.1" to the distance from the center of two wheels to the back of the bot-->
     </joint>
 
     <link name="chassis">
         <visual>
-            <origin xyz="0.5 0 0.15"/> <!-- TODO: change origin to half the box size (for now assume the bot is a rectangle box)-->
+            <origin xyz="0.4827115 0 0.15"/> <!-- TODO: change origin to half the box size (for now assume the bot is a rectangle box)-->
             <geometry>
-                <box size="1 0.35 0.30"/> <!-- size of the bot [width = 1m, length = 0.35m, height = 0.36m] -->
+                <box size="0.965423 0.35 0.30"/> <!-- size of the bot [width = 1m, length = 0.35m, height = 0.36m] -->
             </geometry>
             <material name="white"/>
         </visual>
@@ -63,7 +67,7 @@
     <joint name="left_wheel_joint" type="continuous">
         <parent link="base_link"/>
         <child link="left_wheel"/>
-        <origin xyz="0.322 0.175 0.0025" rpy="-${pi/2} 0 0" /> <!-- TODO: change y offset to how far the wheel from the center -->
+        <origin xyz="0 0.175 0" rpy="-${pi/2} 0 0" /> <!-- TODO: change y offset to how far the wheel from the center -->
         <axis xyz="0 0 1"/>
     </joint>
 
@@ -93,7 +97,7 @@
     <joint name="right_wheel_joint" type="continuous">
         <parent link="base_link"/>
         <child link="right_wheel"/>
-        <origin xyz="0.322 -0.175 0.0025" rpy="${pi/2} 0 0" /> <!-- TODO: change y offset to how far the wheel from the center -->
+        <origin xyz="0 -0.175 0" rpy="${pi/2} 0 0" /> <!-- TODO: change y offset to how far the wheel from the center -->
         <axis xyz="0 0 -1"/>
     </joint>
 
@@ -123,7 +127,7 @@
     <joint name="caster_wheel_joint" type="fixed">
         <parent link="chassis"/>
         <child link="caster_wheel"/>
-        <origin xyz="0.24 0 -0.08"/>
+        <origin xyz="0.24 0 -0.0825"/>
     </joint>
 
 

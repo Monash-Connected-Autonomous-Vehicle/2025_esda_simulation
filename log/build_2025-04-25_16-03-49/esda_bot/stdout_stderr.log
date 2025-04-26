@@ -1,0 +1,130 @@
+-- The C compiler identification is GNU 11.4.0
+-- The CXX compiler identification is GNU 11.4.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found ament_cmake: 1.3.11 (/opt/ros/humble/share/ament_cmake/cmake)
+-- Found Python3: /usr/bin/python3 (found version "3.10.12") found components: Interpreter 
+-- Found ament_lint_auto: 0.12.11 (/opt/ros/humble/share/ament_lint_auto/cmake)
+-- Added test 'copyright' to check source files copyright and LICENSE
+-- Added test 'cppcheck' to perform static code analysis on C / C++ code
+-- Configured cppcheck include dirs: 
+-- Configured cppcheck exclude dirs and/or files: 
+-- Added test 'cpplint' to check C / C++ code against the Google style
+-- Configured cpplint exclude dirs and/or files: 
+-- Added test 'flake8' to check Python code syntax and style conventions
+-- Added test 'lint_cmake' to check CMake code style
+-- Added test 'pep257' to check Python code against some of the docstring style conventions in PEP 257
+-- Added test 'uncrustify' to check C / C++ code style
+-- Configured uncrustify additional arguments: 
+-- Added test 'xmllint' to check XML markup files
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/daniel/esda_bot/build/esda_bot
+-- Install configuration: ""
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/config
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/config/view_bot.rviz
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/config/empty.yaml
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/description
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/description/gazebo_control.xacro
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/description/robot_core.xacro
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/description/inertial_macros.xacro
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/description/robot.urdf.xacro
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/description/depth_camera.xacro
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/description/camera.xacro
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/launch
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/launch/rsp.launch.py
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/launch/launch_sim.launch.py
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/worlds
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/worlds/empty.world
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/worlds/lucid_dream.world
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/velodyne_vlp16.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/drve_middle.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/drve_arm_bracket.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/part_1.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/cstr_wheel_rim.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/drve_top_plate.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/caster_arm_r.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/bort_rim.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/bort_tire.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/arm_endcap.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_body_right__configuration_ali_2mm.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_rear__configuration_ali_2mm.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/zed2_ip_outer_with_lens_v8__2.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/drve_middle.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_welded_body__configuration_ali_2mm.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/caster_arm_r.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_body_left__configuration_ali_2mm.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/zed2_ip_outer_with_lens_v8__3.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/optic__2.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_gps_fin.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/drve_output_carrier.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/part_1.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/bearing_spacer.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_body_right__configuration_ali_2mm.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/cstr_wheel_rim.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/drve_bottom_plate.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/cstr_wheel_tyre.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_lidar_fin.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/drve_top_plate.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_body_left__configuration_ali_2mm.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/optic__2.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/optic.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/drve_arm_bracket.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/robot.urdf
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/drve_output_carrier.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_divider__configuration_ali_2mm.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_rear__configuration_ali_2mm.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/drve_bottom_plate.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/optic__3.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/zed2_ip_outer_with_lens_v8__3.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_camera_mount.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/arm_rhs.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/bort_motor.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/bearing_spacer.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_divider_mount__configuration_ali_2mm.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/bort_tire.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/cstr_wheel_tyre.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/zed2_ip_outer_with_lens_v8.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_lid__configuration_ali_2mm.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_lid__configuration_ali_2mm.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/optic__4.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/bort_motor.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/arm_endcap.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/arm_rhs.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_divider__configuration_ali_2mm.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/zed2_ip_outer_with_lens_v8__2.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_lidar_fin.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/velodyne_vlp16.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_camera_mount.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/bort_rim.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_welded_body__configuration_ali_2mm.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/optic.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_gps_fin.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/optic__4.part
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/zed2_ip_outer_with_lens_v8.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/fcid_divider_mount__configuration_ali_2mm.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/urdf_asterius_v4/optic__3.stl
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/ament_index/resource_index/package_run_dependencies/esda_bot
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/ament_index/resource_index/parent_prefix_path/esda_bot
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/environment/ament_prefix_path.sh
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/environment/ament_prefix_path.dsv
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/environment/path.sh
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/environment/path.dsv
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/local_setup.bash
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/local_setup.sh
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/local_setup.zsh
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/local_setup.dsv
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/package.dsv
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/ament_index/resource_index/packages/esda_bot
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/cmake/esda_botConfig.cmake
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/cmake/esda_botConfig-version.cmake
+-- Installing: /home/daniel/esda_bot/install/esda_bot/share/esda_bot/package.xml

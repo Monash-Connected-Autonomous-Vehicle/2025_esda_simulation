@@ -1,4 +1,0 @@
-Invoking command in '/home/daniel/esda_bot/build/esda_bot': CMAKE_PREFIX_PATH=/home/daniel/ros2_ws/install/my_new_robot_controller:/opt/ros/humble /usr/bin/cmake --build /home/daniel/esda_bot/build/esda_bot -- -j20 -l20
-Invoked command in '/home/daniel/esda_bot/build/esda_bot' returned '0': CMAKE_PREFIX_PATH=/home/daniel/ros2_ws/install/my_new_robot_controller:/opt/ros/humble /usr/bin/cmake --build /home/daniel/esda_bot/build/esda_bot -- -j20 -l20
-Invoking command in '/home/daniel/esda_bot/build/esda_bot': CMAKE_PREFIX_PATH=/home/daniel/ros2_ws/install/my_new_robot_controller:/opt/ros/humble /usr/bin/cmake --install /home/daniel/esda_bot/build/esda_bot
-Invoked command in '/home/daniel/esda_bot/build/esda_bot' returned '0': CMAKE_PREFIX_PATH=/home/daniel/ros2_ws/install/my_new_robot_controller:/opt/ros/humble /usr/bin/cmake --install /home/daniel/esda_bot/build/esda_bot

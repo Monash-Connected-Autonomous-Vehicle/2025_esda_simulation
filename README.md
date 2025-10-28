@@ -1,7 +1,24 @@
-## Robot Package Template
+## 2025 ESDA Vehicle Simulation
+### 1. Set up
+#### 1.1. Install Necessary Dependencies
 
-This is a GitHub template. You can make your own copy by clicking the green "Use this template" button.
-
-It is recommended that you keep the repo/package name the same, but if you do change it, ensure you do a "Find all" using your IDE (or the built-in GitHub IDE by hitting the `.` key) and rename all instances of `my_bot` to whatever your project's name is.
-
-Note that each directory currently has at least one file in it to ensure that git tracks the files (and, consequently, that a fresh clone has direcctories present for CMake to find). These example files can be removed if required (and the directories can be removed if `CMakeLists.txt` is adjusted accordingly).
+#### 1.2. Building the Project
+- Please clone the repository into the `src` folder of your work space, your folder structure should look like this:
+```
+|_workspace_name
+    |_src
+        |_2025_esda_simulation
+```
+- When you are trying to build the project, please do it in the `\workspace_name` level. So the `log`, `build` and `install` folders are generated next to the `src` folder. 
+```
+|_workspace_name
+    |_src
+        |_2025_esda_simulation
+    |_install
+    |_build
+    |_log
+```
+- To source your local build into the current path, so it can be seen by ros2.
+```
+source install/setup.bash
+```

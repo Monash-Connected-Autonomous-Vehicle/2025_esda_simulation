@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(esda_bot)
+project(2025_esda_simulation)
 
 # Default to C99
 if(NOT CMAKE_C_STANDARD)
@@ -33,7 +33,7 @@ if(BUILD_TESTING)
 endif()
 
 install(
-  DIRECTORY config description launch worlds urdf_asterius_v4
+  DIRECTORY config description launch worlds assets
   DESTINATION share/${PROJECT_NAME}
 )
 

@@ -37,6 +37,7 @@ namespace esda_hardware_2025 {
             int pid_d = 0;
             int pid_i = 0;
             int pid_o = 0;
+            bool fake_odom = false;
         };
 
         public:

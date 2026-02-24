@@ -90,9 +90,14 @@ class STMComms {
             val_2 = std::atoi(token_2.c_str());
         }
 
+        // void set_motor_values(int val_1, int val_2) {
+        //     std::stringstream ss;
+        //     ss << "m " << val_1 << " " << val_2 << "\r";
+        //     send_msg(ss.str());
+        // }
         void set_motor_values(int val_1, int val_2) {
             std::stringstream ss;
-            ss << "m " << val_1 << " " << val_2 << "\r";
+            ss << "M " << val_1 << " " << val_2 << "\n";   // <-- uppercase M, newline
             send_msg(ss.str());
         }
 

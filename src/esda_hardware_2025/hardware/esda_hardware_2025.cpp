@@ -55,6 +55,17 @@ namespace esda_hardware_2025 {
         cfg_.baud_rate = std::stoi(info_.hardware_parameters["baud_rate"]);
         cfg_.timeout_ms = std::stoi(info_.hardware_parameters["timeout_ms"]);
         cfg_.enc_counts_per_rev = std::stoi(info_.hardware_parameters["enc_counts_per_rev"]);
+
+        auto to_bool = [](const std::string &s) {
+            return s == "true" || s == "1" || s == "True" || s == "TRUE";
+            };
+
+        if (info_.hardware_parameters.count("fake_odom") > 0) {
+            cfg_.fake_odom = to_bool(info_.hardware_parameters["fake_odom"]);
+        }
+
+        RCLCPP_WARN(rclcpp::get_logger("EsdaHardware2025"), "fake_odom = %s", cfg_.fake_odom ? "true" : "false");
+
         if (info_.hardware_parameters.count("pid_p") > 0) {
             cfg_.pid_p = std::stoi(info_.hardware_parameters["pid_p"]);
             cfg_.pid_d = std::stoi(info_.hardware_parameters["pid_d"]);
@@ -206,9 +217,20 @@ namespace esda_hardware_2025 {
             return hardware_interface::return_type::ERROR;
         }
         
+        double delta_seconds = period.seconds();
+        if (cfg_.fake_odom) {
+            // Fake: measured vel = commanded vel, integrate to position
+            wheel_l_.vel = wheel_l_.cmd;
+            wheel_r_.vel = wheel_r_.cmd;
+
+            wheel_l_.pos += wheel_l_.vel * delta_seconds;
+            wheel_r_.pos += wheel_r_.vel * delta_seconds;
+
+            return hardware_interface::return_type::OK;
+        }   
+        
         comms_.read_encoder_values(wheel_l_.enc, wheel_r_.enc);
         
-        double delta_seconds = period.seconds();
         
         double pos_prev = wheel_l_.pos;
         wheel_l_.pos = wheel_l_.calc_enc_angle();

@@ -25,7 +25,7 @@ class LaneDetectionNode(Node):
         super().__init__('lane_detection_node')
         
         # Parameters
-        self.declare_parameter('show_visualization', True)
+        self.declare_parameter('show_visualization', False)
         self.declare_parameter('publish_rate', 10.0)
         self.declare_parameter('white_threshold_low', 130)  # Grayscale threshold for white (more lenient)
         self.declare_parameter('white_threshold_high', 255)
@@ -56,6 +56,14 @@ class LaneDetectionNode(Node):
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
+        )
+
+        # Keep scan processing low-latency: drop old frames instead of queueing.
+        scan_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
         )
         
         # Subscriber to camera topic (using Left camera for processing)
@@ -101,8 +109,8 @@ class LaneDetectionNode(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # Lidar Interaction (scan also uses RELIABLE from gz_bridge)
-        self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, reliable_qos)
-        self.scan_pub = self.create_publisher(LaserScan, '/scan_fused', reliable_qos)
+        self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, scan_qos)
+        self.scan_pub = self.create_publisher(LaserScan, '/scan_fused', scan_qos)
         
         # Store latest processed image for visualization
         self.latest_viz_image = None
@@ -129,6 +137,8 @@ class LaneDetectionNode(Node):
         """
         # If no lanes detected, just republish the original scan
         if not self.latest_3d_points:
+            # Normalize timestamp to current clock to keep TF consumers in sync.
+            msg.header.stamp = self.get_clock().now().to_msg()
             self.scan_pub.publish(msg)
             return
 
@@ -195,6 +205,8 @@ class LaneDetectionNode(Node):
                         injected_count += 1
                         
             fused_scan.ranges = ranges
+            # Publish with current ROS time to avoid stale timestamps causing TF extrapolation in Nav2.
+            fused_scan.header.stamp = self.get_clock().now().to_msg()
             self.scan_pub.publish(fused_scan)
             
             if injected_count > 0:
@@ -563,6 +575,8 @@ class LaneDetectionNode(Node):
         # Create PointCloud2 message
         msg = PointCloud2()
         msg.header = header # Use same header/frame as camera
+        # Normalize timestamp to current clock for Nav2 message filters.
+        msg.header.stamp = self.get_clock().now().to_msg()
         msg.height = 1
         msg.width = len(points)
         msg.is_bigendian = False

@@ -5,6 +5,7 @@ import signal
 import time
 import glob
 import threading
+import shlex
 from tkinter import filedialog
 
 class SimManager(ctk.CTk):
@@ -38,11 +39,15 @@ class SimManager(ctk.CTk):
         # Determine workspace root dynamically
         script_dir = os.path.dirname(os.path.abspath(__file__))
         if "src/esda_simulation_2025/scripts" in script_dir:
-            self.workspace_root = os.path.abspath(os.path.join(script_dir, "../../.."))
+            workspace_root = os.path.abspath(os.path.join(script_dir, "../../.."))
         elif "lib/esda_simulation_2025" in script_dir:
-            self.workspace_root = os.path.abspath(os.path.join(script_dir, "../../../.."))
+            workspace_root = os.path.abspath(os.path.join(script_dir, "../../../.."))
         else:
-            self.workspace_root = os.getcwd()
+            workspace_root = os.getcwd()
+
+        # RViz/Ogre often fails to resolve file:// URIs when workspace paths contain spaces.
+        # Prefer running everything through a no-space symlink alias when needed.
+        self.workspace_root = self.ensure_workspace_alias(workspace_root)
         
         # Scan for available files
         self.world_files = self.scan_world_files()
@@ -116,6 +121,17 @@ class SimManager(ctk.CTk):
         self.lane_detection_check = ctk.CTkCheckBox(self.sim_frame, text="Enable Lane Detection", variable=self.lane_detection_var, font=("Orbitron", 14), text_color=self.accent_purple, bg_color=self.bg_panel)
         self.lane_detection_check.grid(row=0, column=1, padx=10, pady=6, sticky="w")
 
+        self.headless_var = ctk.BooleanVar(value=False)
+        self.headless_check = ctk.CTkCheckBox(
+            self.sim_frame,
+            text="Headless Gazebo (No GUI)",
+            variable=self.headless_var,
+            font=("Orbitron", 12),
+            text_color=self.accent_green,
+            bg_color=self.bg_panel,
+        )
+        self.headless_check.grid(row=1, column=0, padx=10, pady=(0, 6), sticky="w")
+
         self.sim_button = ctk.CTkButton(self.sim_frame, text="2. Launch Simulation", command=self.toggle_sim, font=("Orbitron", 16, "bold"), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
         self.sim_button.grid(row=0, column=2, padx=10, pady=6, sticky="e")
 
@@ -178,6 +194,32 @@ class SimManager(ctk.CTk):
             "TELEOP": self.teleop_button.cget("fg_color"),
             "LANE": self.slam_button.cget("fg_color")
         }
+
+    def ensure_workspace_alias(self, workspace_root):
+        """Return a no-space workspace path, creating a symlink alias if required."""
+        if " " not in workspace_root:
+            return workspace_root
+
+        home_dir = os.path.expanduser("~")
+        alias_root = os.path.join(home_dir, "esda_simulation_2025_nospace")
+
+        try:
+            if os.path.lexists(alias_root):
+                if os.path.islink(alias_root):
+                    current_target = os.readlink(alias_root)
+                    abs_target = os.path.abspath(os.path.join(os.path.dirname(alias_root), current_target))
+                    if abs_target != workspace_root:
+                        os.remove(alias_root)
+                        os.symlink(workspace_root, alias_root)
+                else:
+                    # Do not overwrite a real directory/file; keep original path.
+                    return workspace_root
+            else:
+                os.symlink(workspace_root, alias_root)
+
+            return alias_root
+        except OSError:
+            return workspace_root
 
     def scan_world_files(self):
         """Scan the worlds directory for .sdf files"""
@@ -247,14 +289,24 @@ class SimManager(ctk.CTk):
         # Setup local workspace
         local_setup = os.path.join(self.workspace_root, "install/setup.bash")
         if os.path.exists(local_setup):
-            local_setup_cmd = f"source {local_setup}"
+            local_setup_cmd = f"source {shlex.quote(local_setup)}"
         else:
             local_setup_cmd = ":" # No-op
+
+        fastdds_cfg = os.path.join(self.workspace_root, "src/esda_simulation_2025/config/fastdds_noshm.xml")
+        # Force discrete NVIDIA GPU on hybrid laptops (Optimus/PRIME).
+        gpu_env_cmd = (
+            "export __NV_PRIME_RENDER_OFFLOAD=1 && "
+            "export __GLX_VENDOR_LIBRARY_NAME=nvidia && "
+            "export __VK_LAYER_NV_optimus=NVIDIA_only && "
+            "export DRI_PRIME=1"
+        )
 
         # Prepare the command to source ROS and our workspace
         # We also disable SHM transport to avoid FastDDS errors in Docker
         full_command = (f'xterm -T "{name}" -geometry 100x30 -e "bash -c \\"'
-                        f'export FASTRTPS_DEFAULT_PROFILES_FILE={self.workspace_root}/src/esda_simulation_2025/config/fastdds_noshm.xml && '
+                        f'export FASTRTPS_DEFAULT_PROFILES_FILE={shlex.quote(fastdds_cfg)} && '
+                        f'{gpu_env_cmd} && '
                         f'{ros_setup_cmd} && '
                         f'{local_setup_cmd} && '
                         f'echo Starting {name}... && '
@@ -308,13 +360,19 @@ class SimManager(ctk.CTk):
         self.status_label.configure(text="Building... Check terminal window", text_color="#F1C40F")
         self.update()
         
-        cmd = f'xterm -T "Build Process" -e "bash -c \\"cd {self.workspace_root} && colcon build --packages-select esda_simulation_2025; echo; echo Done. Press Enter to close.; read\\""'
+        cmd = (
+            f'xterm -T "Build Process" -e "bash -c \\"'
+            f'cd {shlex.quote(self.workspace_root)} && '
+            f'colcon build --packages-select esda_simulation_2025; '
+            f'echo; echo Done. Press Enter to close.; read\\""'
+        )
         proc = subprocess.run(cmd, shell=True)
         
         self.status_label.configure(text="Build attempt finished", text_color="#BDC3C7")
 
     def toggle_sim(self):
         lidar = "true" if self.lidar_var.get() else "false"
+        headless = "true" if self.headless_var.get() else "false"
         selected_world_name = self.selected_world.get()
         # Find full path of selected world
         world_file = next((f for f in self.world_files if os.path.basename(f) == selected_world_name), None)
@@ -330,9 +388,9 @@ class SimManager(ctk.CTk):
             spawn_y = "0"
 
         # Build then launch as requested
-        cmd = (f"cd {self.workspace_root} && "
+        cmd = (f"cd {shlex.quote(self.workspace_root)} && "
                f"colcon build --packages-select esda_simulation_2025 && "
-               f"ros2 launch esda_simulation_2025 launch_sim.launch.py use_lidar:={lidar} world_file:={world_file} spawn_x:={spawn_x} spawn_y:={spawn_y}")
+             f"ros2 launch esda_simulation_2025 launch_sim.launch.py use_lidar:={lidar} headless:={headless} world_file:={shlex.quote(world_file)} spawn_x:={spawn_x} spawn_y:={spawn_y}")
         self.run_in_terminal("SIM", cmd)
 
     def toggle_slam(self):
@@ -360,7 +418,7 @@ class SimManager(ctk.CTk):
                 # map_start_at_dock tells slam_toolbox to load and continue from the saved map
                 cmd = (f"ros2 launch esda_simulation_2025 online_async_launch.py "
                        f"use_sim_time:=true "
-                       f"map_file_name:={map_file_base} "
+                      f"map_file_name:={shlex.quote(map_file_base)} "
                        f"map_start_at_dock:=true "
                        f"scan_topic:={scan_topic}")
                 self.status_label.configure(text=f"Loading SLAM map: {selected_costmap_name}...", text_color="#F1C40F")
@@ -388,7 +446,8 @@ class SimManager(ctk.CTk):
         # Launch lane detection if enabled
         if self.lane_detection_var.get():
             time.sleep(2)  # Give SLAM time to start
-            lane_cmd = (f"ros2 run esda_simulation_2025 lane_detection.py ")
+            lane_cmd = ("ros2 run esda_simulation_2025 lane_detection.py "
+                        "--ros-args -p use_sim_time:=true")
             self.run_in_terminal("LANE", lane_cmd)
 
     def toggle_amcl(self):
@@ -410,9 +469,10 @@ class SimManager(ctk.CTk):
     
     def _launch_amcl_delayed(self, costmap_file):
         time.sleep(3)  # Wait for simulation to be ready
-        scan_topic = "/scan_fused" if self.lane_detection_var.get() else "/scan"
+        # AMCL must keep map->odom fresh; use raw scan for the most stable TF timing.
+        scan_topic = "/scan"
         cmd = (f"ros2 launch esda_simulation_2025 localization_launch.py "
-               f"use_sim_time:=true map:={costmap_file} "
+             f"use_sim_time:=true map:={shlex.quote(costmap_file)} "
                f"amcl_base_frame_id:=base_link amcl_odom_frame_id:=odom "
                f"scan_topic:={scan_topic}")
         self.run_in_terminal("AMCL", cmd)
@@ -422,6 +482,7 @@ class SimManager(ctk.CTk):
             self.status_label.configure(text="Error: Launch Simulation first!", text_color="#E74C3C")
             return
         selected_costmap_name = self.selected_costmap.get()
+        # Use fused scan when lane detection is enabled so Nav2 plans around injected lanes.
         scan_topic = "/scan_fused" if self.lane_detection_var.get() else "/scan"
         
         if selected_costmap_name == "[New Costmap]":
@@ -429,6 +490,7 @@ class SimManager(ctk.CTk):
             cmd = (f"ros2 launch esda_simulation_2025 navigation_launch.py use_sim_time:=true "
                    f"map_subscribe_transient_local:=true "
                    f"scan_topic:={scan_topic}")
+            wait_for_map = True
         else:
             # Find full path of selected costmap
             costmap_file = next((f for f in self.costmap_files if os.path.basename(f) == selected_costmap_name), None)
@@ -437,14 +499,23 @@ class SimManager(ctk.CTk):
                 return
             cmd = (f"ros2 launch esda_simulation_2025 navigation_launch.py use_sim_time:=true "
                    f"map_subscribe_transient_local:=true "
-                   f"map:={costmap_file} "
+                     f"map:={shlex.quote(costmap_file)} "
                    f"scan_topic:={scan_topic}")
+            wait_for_map = False
         self.status_label.configure(text="Waiting for localization to be ready...", text_color="#F1C40F")
         self.update()
-        threading.Thread(target=self._launch_nav_delayed, args=(cmd,), daemon=True).start()
+        threading.Thread(target=self._launch_nav_delayed, args=(cmd, wait_for_map), daemon=True).start()
     
-    def _launch_nav_delayed(self, cmd):
-        time.sleep(2)  # Wait for AMCL/SLAM to be ready
+    def _launch_nav_delayed(self, cmd, wait_for_map=False):
+        time.sleep(4)  # Give AMCL/SLAM more time to publish stable map->odom TF
+        if wait_for_map:
+            # In SLAM mode, ensure /map exists before launching Nav2 (prevents missing "map" frame).
+            map_wait_cmd = (
+                "echo Waiting for /map from SLAM... && "
+                "timeout 25s sh -c 'until ros2 topic echo /map --once > /dev/null 2>&1; do sleep 0.5; done'"
+            )
+            self.run_in_terminal("NAV_PRECHECK", map_wait_cmd)
+            time.sleep(1)
         self.run_in_terminal("NAV", cmd)
 
     def toggle_rviz(self):
@@ -455,17 +526,18 @@ class SimManager(ctk.CTk):
             self.update()
             threading.Thread(target=self._launch_rviz_delayed, args=(rviz_config,), daemon=True).start()
         else:
-            cmd = f"rviz2 -d {rviz_config} --ros-args -p use_sim_time:=true"
+            cmd = f"rviz2 -d {shlex.quote(rviz_config)} --ros-args -p use_sim_time:=true"
             self.run_in_terminal("RVIZ", cmd)
     
     def _launch_rviz_delayed(self, rviz_config):
         time.sleep(2)  # Wait for SLAM to publish the map
-        cmd = f"rviz2 -d {rviz_config} --ros-args -p use_sim_time:=true"
+        cmd = f"rviz2 -d {shlex.quote(rviz_config)} --ros-args -p use_sim_time:=true"
         self.run_in_terminal("RVIZ", cmd)
 
     def toggle_teleop(self):
         # We need to run telemetry inside the script location
-        cmd = f"python3 {self.workspace_root}/src/esda_simulation_2025/scripts/teleop_wasd.py"
+        teleop_script = os.path.join(self.workspace_root, "src/esda_simulation_2025/scripts/teleop_wasd.py")
+        cmd = f"python3 {shlex.quote(teleop_script)}"
         self.run_in_terminal("TELEOP", cmd)
 
     def kill_all(self):
@@ -518,7 +590,8 @@ class SimManager(ctk.CTk):
         self.status_label.configure(text="Launching Waypoint Navigator...", text_color="#F1C40F")
         self.update()
         
-        cmd = f"python3 {self.workspace_root}/src/esda_simulation_2025/scripts/waypoint_navigator.py"
+        waypoint_script = os.path.join(self.workspace_root, "src/esda_simulation_2025/scripts/waypoint_navigator.py")
+        cmd = f"python3 {shlex.quote(waypoint_script)}"
         
         try:
             subprocess.Popen(cmd, shell=True)

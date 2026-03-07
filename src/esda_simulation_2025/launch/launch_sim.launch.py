@@ -2,7 +2,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler, SetEnvironmentVariable
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, Command, PathJoinSubstitution
 from launch.event_handlers import OnProcessExit
@@ -19,6 +19,7 @@ def generate_launch_description():
     world_file = LaunchConfiguration('world_file')
     spawn_x = LaunchConfiguration('spawn_x', default='0.0')
     spawn_y = LaunchConfiguration('spawn_y', default='0.0')
+    headless = LaunchConfiguration('headless', default='false')
     package_name = 'esda_simulation_2025'
     
     # ROS Controller Files:
@@ -61,15 +62,32 @@ def generate_launch_description():
         ]
     )
 
-    ign_launch = IncludeLaunchDescription(
+    ign_launch_gui = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-          os.path.join(
-            get_package_share_directory('ros_gz_sim'),
-            'launch', 'gz_sim.launch.py'
-          )
+            os.path.join(
+                get_package_share_directory('ros_gz_sim'),
+                'launch', 'gz_sim.launch.py'
+            )
         ),
+        condition=UnlessCondition(headless),
         launch_arguments={
-            'gz_args': ['-r ', world_file],
+            # Wrap the world path to preserve spaces (e.g. "ROS Stuff").
+            'gz_args': ['-r "', world_file, '"'],
+            'verbose': 'true'
+        }.items()
+    )
+
+    ign_launch_headless = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('ros_gz_sim'),
+                'launch', 'gz_sim.launch.py'
+            )
+        ),
+        condition=IfCondition(headless),
+        launch_arguments={
+            # Server-only mode for lower overhead (no GUI client).
+            'gz_args': ['-r -s "', world_file, '"'],
             'verbose': 'true'
         }.items()
     )
@@ -158,14 +176,16 @@ def generate_launch_description():
       DeclareLaunchArgument('use_lidar',       default_value='true'),
       DeclareLaunchArgument('spawn_x',         default_value='0.0'),
       DeclareLaunchArgument('spawn_y',         default_value='0.0'),
+    DeclareLaunchArgument('headless',        default_value='false'),
       DeclareLaunchArgument('world_file',      default_value=os.path.join(
-          get_package_share_directory(package_name), 'worlds', 'sim_world_igvc.sdf')),
+          get_package_share_directory(package_name), 'worlds', 'igvc.sdf')),
       rsp,
       ign_resource_path,
       ign_resource_path_legacy,
       bridge,
       camera_frame_fixer,
-      ign_launch,
+    ign_launch_gui,
+    ign_launch_headless,
       spawn_entity,
       joint_broad_spawner,
       diff_drive_spawner,

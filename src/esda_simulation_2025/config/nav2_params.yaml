@@ -32,8 +32,8 @@ amcl:
     tf_broadcast: true
     transform_tolerance: 2.0
     introspection_mode: "disabled"
-    update_min_a: 0.2
-    update_min_d: 0.25
+    update_min_a: 0.05
+    update_min_d: 0.05
     initial_pose_tolerance: 0.5
     z_hit: 0.5
     z_max: 0.05
@@ -119,7 +119,7 @@ controller_server:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.25
+      yaw_goal_tolerance: 1.2
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 40
@@ -136,10 +136,10 @@ controller_server:
       vx_max: 0.4
       vx_min: 0.0
       vy_max: 0.4
-      wz_max: 1.2
+      wz_max: 0.8
       iteration_count: 1
       prune_distance: 2.5
-      transform_tolerance: 0.5
+      transform_tolerance: 1.5
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
@@ -179,7 +179,7 @@ controller_server:
       GoalAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 3.0
+        cost_weight: 1.2
         threshold_to_consider: 0.5
       PreferForwardCritic:
         enabled: true
@@ -199,7 +199,7 @@ controller_server:
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 14.0
+        cost_weight: 8.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 5
         threshold_to_consider: 0.5
@@ -469,11 +469,11 @@ behavior_server:
     local_frame: odom
     global_frame: map
     robot_base_frame: base_link
-    transform_tolerance: 0.5
+    transform_tolerance: 1.0
     simulate_ahead_time: 2.0
-    max_rotational_vel: 1.0
-    min_rotational_vel: 0.4
-    rotational_acc_lim: 3.2
+    max_rotational_vel: 0.7
+    min_rotational_vel: 0.15
+    rotational_acc_lim: 2.0
 
 waypoint_follower:
   ros__parameters:

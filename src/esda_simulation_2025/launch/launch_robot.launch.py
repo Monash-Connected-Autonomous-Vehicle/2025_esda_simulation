@@ -17,6 +17,8 @@ def generate_launch_description():
     sim_mode     = LaunchConfiguration("sim_mode", default="false")
     launch_rviz  = LaunchConfiguration("launch_rviz", default="true")
 
+    launch_lidar = LaunchConfiguration("launch_lidar", default="false")
+
     # Path to your main xacro (adjust filename/path to your actual one)
     xacro_file = PathJoinSubstitution([
         FindPackageShare(package_name),

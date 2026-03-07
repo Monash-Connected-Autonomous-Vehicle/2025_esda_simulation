@@ -32,7 +32,7 @@
         <param name="device">/dev/ttyACM0</param>
         <param name="baud_rate">57600</param>
         <param name="timeout_ms">1000</param>
-        <param name="open_loop">true</param>
+        <param name="open_loop">false</param>
         <param name="enc_counts_per_rev">3436</param>
         <param name="pid_p">20</param>
         <param name="pid_d">12</param>

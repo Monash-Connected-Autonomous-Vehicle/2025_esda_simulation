@@ -62,6 +62,9 @@ namespace esda_hardware_2025 {
 
         if (info_.hardware_parameters.count("fake_odom") > 0) {
             cfg_.fake_odom = to_bool(info_.hardware_parameters["fake_odom"]);
+
+            RCLCPP_INFO(rclcpp::get_logger("EsdaHardware2025"), "fake_odom parameter supplied, using value: %s", cfg_.fake_odom ? "true" : "false");
+
         }
 
         RCLCPP_WARN(rclcpp::get_logger("EsdaHardware2025"), "fake_odom = %s", cfg_.fake_odom ? "true" : "false");
@@ -246,9 +249,15 @@ namespace esda_hardware_2025 {
     }
     
     hardware_interface::return_type esda_hardware_2025 ::EsdaHardware2025::write(const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/) {
+        if (cfg_.fake_odom) {
+            return hardware_interface::return_type::OK;  // don't touch serial at all
+        }
+        
         if (!comms_.connected()) {
             return hardware_interface::return_type::ERROR;
         }
+
+        
         
         int motor_l_counts_per_loop = wheel_l_.cmd / wheel_l_.rads_per_count / cfg_.loop_rate;
         int motor_r_counts_per_loop = wheel_r_.cmd / wheel_r_.rads_per_count / cfg_.loop_rate;

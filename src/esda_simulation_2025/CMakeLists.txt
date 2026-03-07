@@ -48,6 +48,7 @@ install(PROGRAMS
   scripts/teleop_wasd.py
   scripts/ui_launch.py
   scripts/waypoint_navigator.py
+  scripts/loop_waypoints.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -4,7 +4,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler, SetEnvironmentVariable
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, Command, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, Command, PathJoinSubstitution, PythonExpression
 from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -20,6 +20,7 @@ def generate_launch_description():
     spawn_x = LaunchConfiguration('spawn_x', default='0.0')
     spawn_y = LaunchConfiguration('spawn_y', default='0.0')
     headless = LaunchConfiguration('headless', default='false')
+    low_graphics = LaunchConfiguration('low_graphics', default='false')
     package_name = 'esda_simulation_2025'
     
     # ROS Controller Files:
@@ -69,10 +70,29 @@ def generate_launch_description():
                 'launch', 'gz_sim.launch.py'
             )
         ),
-        condition=UnlessCondition(headless),
+        condition=IfCondition(PythonExpression([
+            '"', headless, '" == "false" and "', low_graphics, '" == "false"'
+        ])),
         launch_arguments={
             # Wrap the world path to preserve spaces (e.g. "ROS Stuff").
             'gz_args': ['-r "', world_file, '"'],
+            'verbose': 'true'
+        }.items()
+    )
+
+    ign_launch_gui_low = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('ros_gz_sim'),
+                'launch', 'gz_sim.launch.py'
+            )
+        ),
+        condition=IfCondition(PythonExpression([
+            '"', headless, '" == "false" and "', low_graphics, '" == "true"'
+        ])),
+        launch_arguments={
+            # Use OGRE1 in GUI mode to reduce rendering load on older/mobile GPUs.
+            'gz_args': ['-r --render-engine ogre "', world_file, '"'],
             'verbose': 'true'
         }.items()
     )
@@ -177,6 +197,7 @@ def generate_launch_description():
       DeclareLaunchArgument('spawn_x',         default_value='0.0'),
       DeclareLaunchArgument('spawn_y',         default_value='0.0'),
     DeclareLaunchArgument('headless',        default_value='false'),
+            DeclareLaunchArgument('low_graphics',    default_value='false'),
       DeclareLaunchArgument('world_file',      default_value=os.path.join(
           get_package_share_directory(package_name), 'worlds', 'igvc.sdf')),
       rsp,
@@ -185,6 +206,7 @@ def generate_launch_description():
       bridge,
       camera_frame_fixer,
     ign_launch_gui,
+        ign_launch_gui_low,
     ign_launch_headless,
       spawn_entity,
       joint_broad_spawner,

@@ -132,6 +132,17 @@ class SimManager(ctk.CTk):
         )
         self.headless_check.grid(row=1, column=0, padx=10, pady=(0, 6), sticky="w")
 
+        self.low_graphics_var = ctk.BooleanVar(value=False)
+        self.low_graphics_check = ctk.CTkCheckBox(
+            self.sim_frame,
+            text="Low Graphics Mode",
+            variable=self.low_graphics_var,
+            font=("Orbitron", 12),
+            text_color=self.accent_orange,
+            bg_color=self.bg_panel,
+        )
+        self.low_graphics_check.grid(row=1, column=1, padx=10, pady=(0, 6), sticky="w")
+
         self.sim_button = ctk.CTkButton(self.sim_frame, text="2. Launch Simulation", command=self.toggle_sim, font=("Orbitron", 16, "bold"), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
         self.sim_button.grid(row=0, column=2, padx=10, pady=6, sticky="e")
 
@@ -302,11 +313,20 @@ class SimManager(ctk.CTk):
             "export DRI_PRIME=1"
         )
 
+        # Optional low-graphics hints for GUI apps (mainly Gazebo client).
+        low_graphics_env_cmd = ":"
+        if self.low_graphics_var.get():
+            low_graphics_env_cmd = (
+                "export __GL_SYNC_TO_VBLANK=0 && "
+                "export vblank_mode=0"
+            )
+
         # Prepare the command to source ROS and our workspace
         # We also disable SHM transport to avoid FastDDS errors in Docker
         full_command = (f'xterm -T "{name}" -geometry 100x30 -e "bash -c \\"'
                         f'export FASTRTPS_DEFAULT_PROFILES_FILE={shlex.quote(fastdds_cfg)} && '
                         f'{gpu_env_cmd} && '
+                        f'{low_graphics_env_cmd} && '
                         f'{ros_setup_cmd} && '
                         f'{local_setup_cmd} && '
                         f'echo Starting {name}... && '
@@ -373,6 +393,7 @@ class SimManager(ctk.CTk):
     def toggle_sim(self):
         lidar = "true" if self.lidar_var.get() else "false"
         headless = "true" if self.headless_var.get() else "false"
+        low_graphics = "true" if self.low_graphics_var.get() else "false"
         selected_world_name = self.selected_world.get()
         # Find full path of selected world
         world_file = next((f for f in self.world_files if os.path.basename(f) == selected_world_name), None)
@@ -390,7 +411,7 @@ class SimManager(ctk.CTk):
         # Build then launch as requested
         cmd = (f"cd {shlex.quote(self.workspace_root)} && "
                f"colcon build --packages-select esda_simulation_2025 && "
-             f"ros2 launch esda_simulation_2025 launch_sim.launch.py use_lidar:={lidar} headless:={headless} world_file:={shlex.quote(world_file)} spawn_x:={spawn_x} spawn_y:={spawn_y}")
+               f"ros2 launch esda_simulation_2025 launch_sim.launch.py use_lidar:={lidar} headless:={headless} low_graphics:={low_graphics} world_file:={shlex.quote(world_file)} spawn_x:={spawn_x} spawn_y:={spawn_y}")
         self.run_in_terminal("SIM", cmd)
 
     def toggle_slam(self):

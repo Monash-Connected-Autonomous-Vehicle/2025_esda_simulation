@@ -2,13 +2,14 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, TimerAction, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, TimerAction, RegisterEventHandler, IncludeLaunchDescription
 from launch.event_handlers import OnProcessStart
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
     package_name = "esda_simulation_2025"
@@ -17,7 +18,11 @@ def generate_launch_description():
     sim_mode     = LaunchConfiguration("sim_mode", default="false")
     launch_rviz  = LaunchConfiguration("launch_rviz", default="true")
 
-    launch_lidar = LaunchConfiguration("launch_lidar", default="false")
+    launch_lidar = LaunchConfiguration("launch_lidar", default="true")
+
+    launch_slam = LaunchConfiguration("launch_slam", default="false")
+
+    
 
     # Path to your main xacro (adjust filename/path to your actual one)
     xacro_file = PathJoinSubstitution([
@@ -90,6 +95,64 @@ def generate_launch_description():
         [FindPackageShare(package_name), "config", "view_bot.rviz"]
     )
 
+    # ---------------------------
+    # Velodyne LiDAR (adjust launch file and package as needed)
+    # ---------------------------
+    velodyne_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("velodyne"),
+                "launch", 
+                "velodyne-all-nodes-VLP16-launch.py"
+            )
+        ),        condition=IfCondition(launch_lidar),
+    )
+
+    # Static TF (if not in URDF)
+    velodyne_tf = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        arguments=['0', '0', '0.2', '0', '0', '0', 'base_link', 'velodyne'],
+        output="screen",
+        condition=IfCondition(launch_lidar)
+    )
+
+    # Convert 3D → 2D scan
+    velodyne_to_scan = Node(
+        package='velodyne_laserscan',
+        executable='velodyne_laserscan_node',
+        name='velodyne_laserscan',
+        output='screen',
+        remappings=[
+            ('velodyne_points', '/velodyne_points'),
+            ('scan', '/scan'),
+        ],
+        parameters=[{
+            'ring': 8,
+            'resolution': 0.007,
+        }],
+        condition=IfCondition(launch_lidar)
+    )
+
+    # -------------------------
+    # SLAM Toolbox
+    # -------------------------
+    slam_toolbox = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('slam_toolbox'),
+                'launch',
+                'online_async_launch.py'
+            )
+        ),
+        launch_arguments={
+            'use_sim_time': use_sim_time
+        }.items(),
+        condition=IfCondition(launch_slam)
+    )
+
+
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -129,7 +192,13 @@ def generate_launch_description():
         delayed_joint_broad_spawner,
         delayed_diff_drive_spawner,
 
+
+        velodyne_launch,
+        velodyne_tf,
+        velodyne_to_scan,
+
         delayed_rviz,
         joy_node,
         teleop_node,
+
     ])

@@ -49,6 +49,7 @@ install(PROGRAMS
   scripts/ui_launch.py
   scripts/waypoint_navigator.py
   scripts/loop_waypoints.py
+  scripts/algolism.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

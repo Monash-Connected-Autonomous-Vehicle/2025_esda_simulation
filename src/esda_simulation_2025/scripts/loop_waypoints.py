@@ -61,7 +61,7 @@ class LoopWaypointsNode(Node):
             self.relative_waypoints,
             start_x=self.start_x,
             start_y=self.start_y,
-            loop=False
+            start_yaw=0.0
         )
 
         self.get_logger().info(f'Loop forever: {self.loop_forever}')
@@ -86,62 +86,63 @@ class LoopWaypointsNode(Node):
         pass
 
     def load_relative_waypoints(self):
-        # Define relative waypoints to form a square loop
+        # (forward_distance, turn_after_radians)
+        # Always move forward, then change heading for the next leg
         self.relative_waypoints = [
-            (1.0, 0.0),  # Move 1m forward
-            (0.0, 1.0),  # Move 1m left
-            (-1.0, 0.0), # Move 1m backward
-            (0.0, -1.0)  # Move 1m right
+            (1.0, math.pi / 2),
+            (1.0, math.pi / 2),
+            (1.0, math.pi / 2),
+            (1.0, math.pi / 2),
         ]
 
-    def relative_to_absolute_waypoints(self, relative_points, start_x=0.0, start_y=0.0, loop=False):
+    def relative_to_absolute_waypoints(self, relative_points, start_x=0.0, start_y=0.0, start_yaw=0.0):
         """
-        Convert relative (dx, dy) steps into absolute (x, y, yaw) waypoints in map frame.
-        Yaw is chosen to face the direction of travel for each segment.
+        Convert forward-only local segments into absolute (x, y, yaw) waypoints.
+
+        Each entry is:
+            (forward_distance, turn_after)
+
+        The robot moves forward along its current heading.
+        The waypoint yaw is set to the current heading for that segment.
+        Then the heading is updated for the next segment.
         """
         absolute_points = []
         current_x = start_x
         current_y = start_y
+        current_yaw = start_yaw
 
-        for dx, dy in relative_points:
-            next_x = current_x + dx
-            next_y = current_y + dy
+        for forward_dist, turn_after in relative_points:
+            next_x = current_x + forward_dist * math.cos(current_yaw)
+            next_y = current_y + forward_dist * math.sin(current_yaw)
 
-            yaw = math.atan2(dy, dx) if (dx != 0.0 or dy != 0.0) else 0.0
-            absolute_points.append((next_x, next_y, yaw))
+            # Face the direction of travel for this segment
+            absolute_points.append((next_x, next_y, current_yaw))
 
             current_x = next_x
             current_y = next_y
+            current_yaw += turn_after
 
-        # Optional: if looping, make the last waypoint face back toward the first
-        if loop and len(absolute_points) > 1:
-            first_x, first_y, _ = absolute_points[0]
-            last_x, last_y, _ = absolute_points[-1]
-            final_yaw = math.atan2(first_y - last_y, first_x - last_x)
-            absolute_points[-1] = (last_x, last_y, final_yaw)
+            # Keep angle tidy in [-pi, pi]
+            current_yaw = math.atan2(math.sin(current_yaw), math.cos(current_yaw))
 
         return absolute_points
 
 
     # Generates waypoints randomly within the defined safety region - Not used in current implementation but can be enabled for testing
-    def generate_random_waypoint(self):
+    def generate_random_point(self):
         x = random.uniform(self.x_min, self.x_max)
         y = random.uniform(self.y_min, self.y_max)
-        # yaw = random.uniform(-math.pi, math.pi)
-        yaw = 0.0  # Keep yaw fixed for simplicity, can be randomized if needed
-        return (x, y, yaw)
-    
-    # This function can be expanded to store generated waypoints in a list
+        return (x, y)
+
     def store_generated_waypoints(self):
-        # This function can be expanded to store generated waypoints in a file or database for later analysis
-        waypoints_list = []
+        points = []
 
         for _ in range(self.num_waypoints):
-            waypoint = self.generate_random_waypoint()
-            waypoints_list.append(waypoint)
-            self.get_logger().info(f'Generated waypoint: {waypoint}')
-        
-        return waypoints_list
+            point = self.generate_random_point()
+            points.append(point)
+            self.get_logger().info(f'Generated point: {point}')
+
+        return self.add_headings_to_waypoints(points, loop=False)
 
     def load_waypoints(self):
         return [
@@ -255,7 +256,9 @@ class LoopWaypointsNode(Node):
             self.get_logger().warn(f'Missed waypoints: {missed}')
 
             # Retry only missed waypoints
-            retry_waypoints = [self.waypoints[i] for i in missed]
+            # retry_waypoints = [self.waypoints[i] for i in missed]
+            retry_points = [(self.waypoints[i][0], self.waypoints[i][1]) for i in missed]
+            retry_waypoints = self.add_headings_to_waypoints(retry_points, loop=False)
 
             self.get_logger().info(f'Retrying missed waypoints: {retry_waypoints}')
             self.send_custom_waypoints(retry_waypoints)
@@ -268,7 +271,13 @@ class LoopWaypointsNode(Node):
             self.get_logger().info(f'Waiting {self.pause_seconds} seconds before restarting...')
             time.sleep(self.pause_seconds)
 
-            self.regenerate_waypoints()  # Optionally regenerate waypoints for the next loop
+            # self.regenerate_waypoints()  # Optionally regenerate waypoints for the next loop
+            self.waypoints = self.relative_to_absolute_waypoints(
+                self.relative_waypoints,
+                start_x=self.start_x,
+                start_y=self.start_y,
+                start_yaw=0.0
+            )
 
             self.send_waypoints()
         else:

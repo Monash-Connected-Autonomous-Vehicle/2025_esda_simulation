@@ -97,7 +97,12 @@ def generate_launch_description():
     joint_broad_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["joint_state_broadcaster"],
+        arguments=[
+            "joint_state_broadcaster",
+            "--controller-manager", "/controller_manager",
+            "--controller-manager-timeout", "20",
+            "--switch-timeout", "20",
+            ],
         output='screen',
         parameters=[{'use_sim_time': use_sim_time}]
     )
@@ -108,6 +113,8 @@ def generate_launch_description():
         arguments=[
             'diff_drive_base_controller',
             '--param-file', robot_controllers,
+            '--controller-manager-timeout', '20',
+            '--switch-timeout', '20',
             #'--ros-args', '-r', '/diff_drive_base_controller/cmd_vel:=/cmd_vel'
         ],
         output='screen',

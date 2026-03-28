@@ -42,11 +42,19 @@ class FrontierExplorationNode(Node):
         self.goal_yaw_mode = str(self.get_parameter('goal_yaw_mode').value)
         self.fixed_goal_yaw = float(self.get_parameter('fixed_goal_yaw').value)
 
+        self.stop_immediate_retries_test_param = True
+
         # State
         self.map_array = None
         self.map_info = None
         self.robot_x = None
         self.robot_y = None
+
+        # Remembers the last goal   
+        self.last_reached_goal = None
+        self.reached_goal_radius = 0.15
+
+        self.robot_yaw = 0.0
 
         self.goal_active = False
         self.goal_handle = None
@@ -67,6 +75,13 @@ class FrontierExplorationNode(Node):
 
         self.get_logger().info('Proper frontier exploration node started.')
 
+    def is_near_last_reached_goal(self, wx, wy):
+        if self.last_reached_goal is None:
+            return False
+
+        lx, ly = self.last_reached_goal
+        return math.hypot(wx - lx, wy - ly) < self.reached_goal_radius
+
     def map_callback(self, msg: OccupancyGrid):
         self.map_info = msg.info
         self.map_array = np.array(msg.data, dtype=np.int16).reshape(
@@ -76,6 +91,9 @@ class FrontierExplorationNode(Node):
     def odom_callback(self, msg: Odometry):
         self.robot_x = msg.pose.pose.position.x
         self.robot_y = msg.pose.pose.position.y
+
+        q = msg.pose.pose.orientation
+        self.robot_yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
     def timer_callback(self):
         if self.map_array is None or self.map_info is None:
@@ -103,6 +121,8 @@ class FrontierExplorationNode(Node):
         if goal is None:
             self.get_logger().info('All frontiers invalid or blacklisted.')
             return
+
+    
 
         self.send_navigation_goal(goal)
 
@@ -183,6 +203,19 @@ class FrontierExplorationNode(Node):
         cx = int(round(sum(xs) / len(xs)))
         cy = int(round(sum(ys) / len(ys)))
         return self.grid_to_world(cx, cy)
+    
+    def cluster_farthest_world(self, cluster):
+        best = None
+        best_dist = -1.0
+
+        for gx, gy in cluster:
+            wx, wy = self.grid_to_world(gx, gy)
+            d = math.hypot(wx - self.robot_x, wy - self.robot_y)
+            if d > best_dist:
+                best_dist = d
+                best = (wx, wy)
+
+        return best
 
     def select_best_goal(self, clusters):
         """
@@ -193,18 +226,35 @@ class FrontierExplorationNode(Node):
         best_score = float('-inf')
 
         for cluster in clusters:
-            wx, wy = self.cluster_centroid_world(cluster)
+            # wx, wy = self.cluster_centroid_world(cluster)
+            wx, wy = self.cluster_farthest_world(cluster)
 
             if self.is_blacklisted(wx, wy):
                 continue
 
             distance = math.hypot(wx - self.robot_x, wy - self.robot_y)
+
+            if distance < 0.5:
+                continue
+
+            if self.is_near_last_reached_goal(wx, wy):
+                continue
+
+            # if distance < 0:
+            #     continue
+
             size = len(cluster)
-            score = size - 2.0 * distance
+            score = size + 2.0 * distance
 
             if score > best_score:
                 best_score = score
                 best_goal = (wx, wy)
+
+            self.get_logger().info(
+            f"goal=({wx:.2f},{wy:.2f}) dist={distance:.2f} "
+            f"blacklisted={self.is_blacklisted(wx, wy)} "
+            f"near_last={self.is_near_last_reached_goal(wx, wy)}"
+            )
 
         return best_goal
 
@@ -229,10 +279,12 @@ class FrontierExplorationNode(Node):
 
         gx, gy = goal
 
-        if self.goal_yaw_mode == 'face_goal':
-            yaw = math.atan2(gy - self.robot_y, gx - self.robot_x)
-        else:
-            yaw = self.fixed_goal_yaw
+        # if self.goal_yaw_mode == 'face_goal':
+        #     yaw = math.atan2(gy - self.robot_y, gx - self.robot_x)
+        # else:
+        #     yaw = self.fixed_goal_yaw
+
+        yaw = self.robot_yaw
 
         goal_msg = NavigateToPose.Goal()
         goal_msg.pose = PoseStamped()
@@ -292,21 +344,26 @@ class FrontierExplorationNode(Node):
         # 4 = STATUS_SUCCEEDED
         if status == 4:
             self.get_logger().info('Frontier goal succeeded.')
-            self.blacklist_goal(self.current_goal)
+            self.last_reached_goal = self.current_goal
+            # self.blacklist_goal(self.current_goal)
         else:
+            # self.get_logger().warn(f'Frontier goal failed with status {status}.')
+            # self.blacklist_goal(self.current_goal)
+            # self.get_logger().info(f'Blacklisted goal at ({self.current_goal[0]:.2f}, {self.current_goal[1]:.2f})')
             self.get_logger().warn(f'Frontier goal failed with status {status}.')
-            self.blacklist_goal(self.current_goal)
 
         self.goal_handle = None
         self.current_goal = None
         self.goal_sent_time = None
 
         # Try immediately again for more continuous exploration
-        clusters = self.detect_frontier_clusters()
-        if clusters:
-            next_goal = self.select_best_goal(clusters)
-            if next_goal is not None:
-                self.send_navigation_goal(next_goal)
+
+        if self.stop_immediate_retries_test_param:
+            clusters = self.detect_frontier_clusters()
+            if clusters:
+                next_goal = self.select_best_goal(clusters)
+                if next_goal is not None:
+                    self.send_navigation_goal(next_goal)
 
     def cancel_current_goal(self):
         if self.goal_handle is None:

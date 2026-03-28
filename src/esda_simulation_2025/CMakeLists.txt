@@ -50,6 +50,7 @@ install(PROGRAMS
   scripts/waypoint_navigator.py
   scripts/loop_waypoints.py
   scripts/algolism.py
+  scripts/track_waypoint_following.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -40,13 +40,13 @@ class FrontierExplorer(Node):
         self.declare_parameter("goal_tolerance", 0.7)
         self.declare_parameter("frontier_search_min_unknown_neighbors", 1)
         self.declare_parameter("progress_timeout_sec", 20.0)
-        self.declare_parameter("obstacle_cost_threshold", 50)
+        self.declare_parameter("obstacle_cost_threshold", 40)
 
         self.declare_parameter("min_goal_distance", 0.2)
         self.declare_parameter("max_goal_distance", 50.0)
         self.declare_parameter("goal_blacklist_radius", 2.0)
         self.declare_parameter("max_recent_goals", 40)
-        self.declare_parameter("goal_clearance_radius_cells", 2)
+        self.declare_parameter("goal_clearance_radius_cells", 3)
 
         # Initial startup behavior parameters (not fully implemented yet)
         self.declare_parameter("startup_forward_enabled", True)
@@ -322,6 +322,13 @@ class FrontierExplorer(Node):
         if self.latest_map is None:
             return None
 
+        pose = self.get_robot_pose_and_yaw()
+        if pose is None:
+            self.get_logger().warn("Could not get robot yaw for frontier selection")
+            return None
+
+        _, _, robot_yaw = pose
+
         frontier_clusters = self.find_frontier_clusters(self.latest_map)
         self.get_logger().info(f"Found {len(frontier_clusters)} frontier clusters")
 
@@ -365,6 +372,25 @@ class FrontierExplorer(Node):
                 )
                 continue
 
+            goal_yaw = math.atan2(
+                goal_world[1] - robot_pose[1],
+                goal_world[0] - robot_pose[0]
+            )
+
+            yaw_error = math.atan2(
+                math.sin(goal_yaw - robot_yaw),
+                math.cos(goal_yaw - robot_yaw)
+            )
+
+            # Only allow frontier goals roughly in front of the robot
+            # 70 deg each side = 140 deg forward cone
+            if abs(yaw_error) > math.radians(70.0):
+                self.get_logger().info(
+                    f"Cluster {i} rejected: outside forward sector "
+                    f"(yaw_error={math.degrees(yaw_error):.1f} deg)"
+                )
+                continue
+
             if self.is_blacklisted_goal(goal_world):
                 self.get_logger().info(f"Cluster {i} rejected: blacklisted")
                 continue
@@ -373,7 +399,8 @@ class FrontierExplorer(Node):
 
             self.get_logger().info(
                 f"Cluster {i} accepted: goal=({goal_world[0]:.2f}, {goal_world[1]:.2f}), "
-                f"dist={dist:.2f}, score={score:.2f}"
+                f"dist={dist:.2f}, yaw_error_deg={math.degrees(yaw_error):.1f}, "
+                f"score={score:.2f}"
             )
 
             candidates.append((score, goal_world, len(cluster)))
@@ -393,12 +420,33 @@ class FrontierExplorer(Node):
 
     def score_frontier_cluster(
         self,
-        cluster: List[GridCell],
-        goal_world: WorldPoint,
-        robot_pose: WorldPoint,
+        cluster,
+        goal_world,
+        robot_pose,
     ) -> float:
-        dist = math.hypot(goal_world[0] - robot_pose[0], goal_world[1] - robot_pose[1])
-        return (2.0 * len(cluster)) - dist
+        dist = math.hypot(goal_world[0] - robot_pose[0],
+                        goal_world[1] - robot_pose[1])
+
+        pose = self.get_robot_pose_and_yaw()
+        heading_penalty = 0.0
+
+        if pose is not None:
+            _, _, robot_yaw = pose
+
+            goal_yaw = math.atan2(
+                goal_world[1] - robot_pose[1],
+                goal_world[0] - robot_pose[0]
+            )
+
+            yaw_error = math.atan2(
+                math.sin(goal_yaw - robot_yaw),
+                math.cos(goal_yaw - robot_yaw)
+            )
+
+            # BIG penalty for turning away
+            heading_penalty = abs(yaw_error) * 10.0
+
+        return (2.0 * len(cluster)) - dist - heading_penalty
 
     def world_to_grid(self, map_msg: OccupancyGrid, wx: float, wy: float) -> Optional[GridCell]:
         origin_x = map_msg.info.origin.position.x
@@ -414,6 +462,54 @@ class FrontierExplorer(Node):
             return None
 
         return (gx, gy)
+    
+    def evaluate_goal_cell(
+        self, map_msg: OccupancyGrid, x: int, y: int
+    ) -> Tuple[bool, float, float]:
+        r = self.goal_clearance_radius_cells
+
+        unknown_count = 0
+        total_count = 0
+        nearest_obstacle_dist = float("inf")
+
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                nx = x + dx
+                ny = y + dy
+
+                val = self.get_cell(map_msg, nx, ny)
+                if val is None:
+                    return (False, 0.0, 1.0)
+
+                total_count += 1
+
+                if val == -1:
+                    unknown_count += 1
+                    continue
+
+                # Anything at or above threshold is considered too close to obstacle
+                if val >= self.obstacle_cost_threshold:
+                    return (False, 0.0, 1.0)
+
+                # Track nearest non-free cost as a proxy for obstacle proximity
+                if val > 0:
+                    dist = math.hypot(dx, dy)
+                    if dist < nearest_obstacle_dist:
+                        nearest_obstacle_dist = dist
+
+        unknown_ratio = unknown_count / total_count if total_count > 0 else 1.0
+
+        # Make this stricter than your current 0.6
+        if unknown_ratio > 0.20:
+            return (False, 0.0, unknown_ratio)
+
+        # If no nonzero-cost cells nearby, treat as very open
+        if nearest_obstacle_dist == float("inf"):
+            clearance_score = float(r + 1)
+        else:
+            clearance_score = nearest_obstacle_dist
+
+        return (True, clearance_score, unknown_ratio)
 
     def choose_reachable_goal_cell(
         self, cluster: List[GridCell], robot_pose: WorldPoint
@@ -442,7 +538,12 @@ class FrontierExplorer(Node):
         ux = dx / mag
         uy = dy / mag
 
-        max_backoff = 50
+        # Search farther back from the frontier centroid
+        max_backoff = 80
+
+        best_cell = None
+        best_score = -float("inf")
+
         checked_free = 0
         checked_safe = 0
 
@@ -459,17 +560,39 @@ class FrontierExplorer(Node):
 
             checked_free += 1
 
-            if self.is_goal_cell_safe(self.latest_map, gx, gy):
-                self.get_logger().info(
-                    f"choose_reachable_goal_cell: found safe cell at step={step}, cell=({gx}, {gy})"
-                )
-                return (gx, gy)
+            safe, clearance_score, unknown_ratio = self.evaluate_goal_cell(
+                self.latest_map, gx, gy
+            )
+
+            if not safe:
+                continue
 
             checked_safe += 1
 
+            # Prefer cells with:
+            # 1) larger clearance from obstacles
+            # 2) less nearby unknown
+            # 3) some backoff from the frontier edge
+            score = (
+                3.0 * clearance_score
+                - 2.0 * unknown_ratio
+                + 0.05 * step
+            )
+
+            if score > best_score:
+                best_score = score
+                best_cell = (gx, gy)
+
+        if best_cell is not None:
+            self.get_logger().info(
+                f"choose_reachable_goal_cell: selected best safe cell={best_cell}, "
+                f"score={best_score:.3f}, free_checked={checked_free}, safe_checked={checked_safe}"
+            )
+            return best_cell
+
         self.get_logger().warn(
             f"choose_reachable_goal_cell failed: free_cells_checked={checked_free}, "
-            f"unsafe_free_cells={checked_safe}"
+            f"safe_cells_checked={checked_safe}"
         )
         return None
 

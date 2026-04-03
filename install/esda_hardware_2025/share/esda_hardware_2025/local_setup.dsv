@@ -1,1 +1,2 @@
-/home/samuel/MCAV/ESDA/Asterius_MK2/esda_sim_ws/esda_sim_ws/build/esda_hardware_2025/ament_cmake_environment_hooks/local_setup.dsv
+source;share/esda_hardware_2025/environment/ament_prefix_path.sh
+source;share/esda_hardware_2025/environment/path.sh

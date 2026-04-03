@@ -1,1 +1,8 @@
-/home/samuel/MCAV/ESDA/Asterius_MK2/esda_sim_ws/esda_sim_ws/src/esda_hardware_2025/esda_hardware_2025.xml
+<library path="esda_hardware_2025">
+  <class
+    name="esda_hardware_2025/EsdaHardware2025"
+    type="esda_hardware_2025::EsdaHardware2025"
+    base_class_type="hardware_interface::SystemInterface">
+    <description>ESDA hardware interface</description>
+  </class>
+</library>

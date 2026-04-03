@@ -1,1 +1,1 @@
-/home/samuel/MCAV/ESDA/Asterius_MK2/esda_sim_ws/esda_sim_ws/build/esda_hardware_2025/ament_cmake_index/share/ament_index/resource_index/package_run_dependencies/esda_hardware_2025
+hardware_interface;pluginlib;rclcpp;rclcpp_lifecycle;ros2_controllers_test_nodes;joint_state_broadcaster;diff_drive_controller;ros2controlcli;controller_manager;rviz2;robot_state_publisher;ament_lint_auto;ament_lint_common

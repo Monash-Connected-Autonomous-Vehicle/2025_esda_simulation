@@ -36,21 +36,21 @@ class FrontierExplorer(Node):
         self.declare_parameter("loop_period", 1.0)
         self.declare_parameter("goal_pause_seconds", 1.0)
 
-        self.declare_parameter("min_frontier_size", 2)
+        self.declare_parameter("min_frontier_size", 1)
         self.declare_parameter("goal_tolerance", 0.7)
         self.declare_parameter("frontier_search_min_unknown_neighbors", 1)
         self.declare_parameter("progress_timeout_sec", 20.0)
-        self.declare_parameter("obstacle_cost_threshold", 40)
+        self.declare_parameter("obstacle_cost_threshold", 60)
 
         self.declare_parameter("min_goal_distance", 0.2)
         self.declare_parameter("max_goal_distance", 50.0)
         self.declare_parameter("goal_blacklist_radius", 2.0)
         self.declare_parameter("max_recent_goals", 40)
-        self.declare_parameter("goal_clearance_radius_cells", 3)
+        self.declare_parameter("goal_clearance_radius_cells", 2)
 
         # Initial startup behavior parameters (not fully implemented yet)
         self.declare_parameter("startup_forward_enabled", True)
-        self.declare_parameter("startup_forward_distance", 3.5)
+        self.declare_parameter("startup_forward_distance", 5.5)
 
         self.map_topic = str(self.get_parameter("map_topic").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
@@ -400,7 +400,7 @@ class FrontierExplorer(Node):
 
             # Only allow frontier goals roughly in front of the robot
             # 45 deg each side = 90 deg forward cone
-            if abs(yaw_error) > math.radians(45.0):
+            if abs(yaw_error) > math.radians(75.0):
                 self.get_logger().info(
                     f"Cluster {i} rejected: outside forward sector "
                     f"(yaw_error={math.degrees(yaw_error):.1f} deg)"
@@ -521,7 +521,7 @@ class FrontierExplorer(Node):
         unknown_ratio = unknown_count / total_count if total_count > 0 else 1.0
 
         # Make this stricter than your current 0.6
-        if unknown_ratio > 0.20:
+        if unknown_ratio > 0.40:
             return (False, 0.0, unknown_ratio)
 
         # If no nonzero-cost cells nearby, treat as very open

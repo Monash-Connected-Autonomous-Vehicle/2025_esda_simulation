@@ -142,13 +142,20 @@ class FrontierExplorer(Node):
 
         rx, ry, yaw = pose
 
+        # 👇 ADD THIS
+        self.get_logger().info(
+            f"[STARTUP] Pose: x={rx:.2f}, y={ry:.2f}, "
+            f"yaw={yaw:.2f} rad ({math.degrees(yaw):.1f} deg)"
+        )
+
+
         gx = rx + self.startup_forward_distance * math.cos(yaw)
         gy = ry + self.startup_forward_distance * math.sin(yaw)
 
+        # 👇 ALSO ADD THIS (VERY useful)
         self.get_logger().info(
-            f"Startup phase: sending forward goal ({gx:.2f}, {gy:.2f})"
+            f"[STARTUP] Goal: gx={gx:.2f}, gy={gy:.2f}"
         )
-
         self.send_goal((gx, gy))
         self.startup_goal_sent = True
         return True
@@ -382,9 +389,18 @@ class FrontierExplorer(Node):
                 math.cos(goal_yaw - robot_yaw)
             )
 
+            forward_score = math.cos(yaw_error)
+
+            if forward_score < -0.2:
+                self.get_logger().info(
+                    f"Cluster {i} rejected: too far off forward direction "
+                    f"(forward_score={forward_score:.2f})"
+                )
+                continue
+
             # Only allow frontier goals roughly in front of the robot
-            # 70 deg each side = 140 deg forward cone
-            if abs(yaw_error) > math.radians(70.0):
+            # 45 deg each side = 90 deg forward cone
+            if abs(yaw_error) > math.radians(45.0):
                 self.get_logger().info(
                     f"Cluster {i} rejected: outside forward sector "
                     f"(yaw_error={math.degrees(yaw_error):.1f} deg)"
@@ -424,11 +440,14 @@ class FrontierExplorer(Node):
         goal_world,
         robot_pose,
     ) -> float:
-        dist = math.hypot(goal_world[0] - robot_pose[0],
-                        goal_world[1] - robot_pose[1])
+        dist = math.hypot(
+            goal_world[0] - robot_pose[0],
+            goal_world[1] - robot_pose[1]
+        )
 
         pose = self.get_robot_pose_and_yaw()
         heading_penalty = 0.0
+        forward_bonus = 0.0
 
         if pose is not None:
             _, _, robot_yaw = pose
@@ -443,10 +462,12 @@ class FrontierExplorer(Node):
                 math.cos(goal_yaw - robot_yaw)
             )
 
-            # BIG penalty for turning away
-            heading_penalty = abs(yaw_error) * 10.0
+            abs_err = abs(yaw_error)
 
-        return (2.0 * len(cluster)) - dist - heading_penalty
+            heading_penalty = abs_err * 6.0
+            forward_bonus = 3.0 * math.cos(abs_err)
+
+        return (2.0 * len(cluster)) - dist - heading_penalty + forward_bonus
 
     def world_to_grid(self, map_msg: OccupancyGrid, wx: float, wy: float) -> Optional[GridCell]:
         origin_x = map_msg.info.origin.position.x
@@ -711,6 +732,8 @@ class FrontierExplorer(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = FrontierExplorer()
+
+    
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

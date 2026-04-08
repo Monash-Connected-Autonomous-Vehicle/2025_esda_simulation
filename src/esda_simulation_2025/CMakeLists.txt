@@ -51,6 +51,7 @@ install(PROGRAMS
   scripts/loop_waypoints.py
   scripts/algolism.py
   scripts/track_waypoint_following.py
+  scripts/follow_the_gap.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

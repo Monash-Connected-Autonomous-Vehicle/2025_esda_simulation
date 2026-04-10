@@ -13,6 +13,7 @@ from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid, Odometry
 
 
+
 class FrontierExplorationNode(Node):
     def __init__(self):
         super().__init__('frontier_exploration_node')

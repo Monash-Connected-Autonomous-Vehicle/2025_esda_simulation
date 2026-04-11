@@ -82,6 +82,9 @@ def extract_param_from_xml(xml_text, property_name='chassis_width'):
 
     return None
 
+def wrap_to_pi(angle):
+    return math.atan2(math.sin(angle), math.cos(angle))
+
 class FollowTheGap(Node):
     def __init__(self):
         super().__init__('follow_the_gap')
@@ -118,7 +121,7 @@ class FollowTheGap(Node):
         self.robot_radius = self.robot_x_width / 2.0  # Assuming the robot's width is the limiting factor for navigation
         self.ftg_safety_radius = self.robot_radius + 0.1  # Adding a safety margin to the robot's radius ~ 0.35 meters total
 
-        self.safe_distance = 5.0  # Minimum safe distance to obstacles (in meters). Used after extending disparities to determine if a gap is navigable.
+        self.safe_distance = 2.5  # Minimum safe distance to obstacles (in meters). Used after extending disparities to determine if a gap is navigable.
 
         # Declare parameters related to the Disparity Extender method
         self.x = 0.0
@@ -138,12 +141,21 @@ class FollowTheGap(Node):
             10
         )
 
+        # Parameters for sending goals to Nav2
+        self.last_goal = None
+        self.last_goal_time = self.get_clock().now()
+        self.goal_update_period = 1.0  # seconds
+        self.min_goal_shift = 0.5      # metres
+        self.min_yaw_shift = 0.35      # radians
+
         self.get_logger().info('FollowTheGap node has been initialized with the following parameters:')
         self.get_logger().info(f"Robot Description File: {self.get_parameter('robot_description_file').get_parameter_value().string_value}")
         self.get_logger().info(f"Robot Width: {self.robot_x_width}")
         self.get_logger().info(f"Robot Length: {self.robot_y_width}")
         self.get_logger().info(f"Robot Radius: {self.robot_radius}")
         self.get_logger().info(f"FTG Safety Radius: {self.ftg_safety_radius}")
+
+    
     
     def send_navigation_goal(self, target_x, target_y, target_theta):
         # This function sends a navigation goal to the Nav2 stack to navigate towards the specified target position and orientation. It constructs a NavigateToPose action goal with the target pose and sends it to the action server, allowing the robot to navigate towards the desired location.
@@ -176,7 +188,7 @@ class FollowTheGap(Node):
             gap_center_angle = np.mean(gap_angles)
 
             # Calculate the score based on the absolute difference between the gap center angle and the goal angle
-            score = abs(gap_center_angle - goal_angle)
+            score = abs(wrap_to_pi(gap_center_angle - goal_angle))
 
             if score < best_score:
                 best_score = score
@@ -331,15 +343,55 @@ class FollowTheGap(Node):
         print(f"Safe groups: {safe_groups}")
 
         # 12. Evaluate the gaps based on their alignment with the goal direction to determine the best path forward. This will involve calculating the angle to the goal and comparing it with the angles of the identified gaps to select the most suitable one for navigation.
-        goal_angle = math.atan2(self.goal_pose[1] - self.y, self.goal_pose[0] - self.x)
-        best_gap = self.score_gap(forward_angles, safe_groups, safe_mask, forward_angles, goal_angle)
+        goal_angle_world = math.atan2(self.goal_pose[1] - self.y, self.goal_pose[0] - self.x)
+
+        # convert world goal direction into robot-relative direction
+        goal_angle_robot = wrap_to_pi(goal_angle_world - self.theta)
+
+        best_gap = self.score_gap(extended_ranges, safe_groups, safe_mask, forward_angles, goal_angle_robot)
 
         print(f"Best gap: {best_gap}")
 
         # 13. If a suitable gap is found, publish a navigation goal towards the center of that gap. This will involve calculating the target position based on the angle and distance of the best gap, and sending a goal to the Nav2 stack to navigate towards that position. 
-    
+        if best_gap is None:
+            self.get_logger().warn("No safe gap found")
+            return
 
-        pass
+        gap_center_angle, gap_indices = best_gap
+        gap_mid_idx = gap_indices[len(gap_indices) // 2]
+        # gap_distance = float(extended_ranges[gap_mid_idx])
+        gap_distance = min(float(extended_ranges[gap_mid_idx]), 1.5)
+
+        orientation = wrap_to_pi(self.theta + gap_center_angle)
+        target_x = self.x + gap_distance * math.cos(orientation)
+        target_y = self.y + gap_distance * math.sin(orientation)
+
+        now = self.get_clock().now()
+        time_since_last = (now - self.last_goal_time).nanoseconds / 1e9
+
+        send_new_goal = False
+
+        if self.last_goal is None:
+            send_new_goal = True
+        else:
+            last_x, last_y, last_yaw = self.last_goal
+            dist_shift = math.hypot(target_x - last_x, target_y - last_y)
+            yaw_shift = abs(wrap_to_pi(orientation - last_yaw))
+
+            if time_since_last >= self.goal_update_period and (
+                dist_shift > self.min_goal_shift or yaw_shift > self.min_yaw_shift
+            ):
+                send_new_goal = True
+
+        if send_new_goal:
+            self.send_navigation_goal(target_x, target_y, orientation)
+            self.last_goal = (target_x, target_y, orientation)
+            self.last_goal_time = now
+
+        # orientation = self.theta
+        # self.send_navigation_goal(target_x, target_y, orientation)
+
+        
 
 
 def main():

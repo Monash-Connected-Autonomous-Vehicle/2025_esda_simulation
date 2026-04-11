@@ -391,6 +391,8 @@ class FollowTheGap(Node):
         # orientation = self.theta
         # self.send_navigation_goal(target_x, target_y, orientation)
 
+        print(f"Target position: ({target_x:.2f}, {target_y:.2f}), orientation: {math.degrees(orientation):.1f} degrees")
+
         
 
 

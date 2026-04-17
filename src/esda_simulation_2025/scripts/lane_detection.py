@@ -587,11 +587,15 @@ class LaneDetectionNode(Node):
 
     def publish_lane_markers(self, lines, header):
         """
-        Publish detected lanes as markers showing actual lane segments at ground level
-        Uses discrete cubes along the lane to show the real position
+        Publish detected lanes as markers showing actual lane segments at ground level.
+        Also split sampled points into left and right lane lists.
         """
         marker_array = MarkerArray()
-        
+
+        # Store usable lane data for control
+        self.left_lane_points = []
+        self.right_lane_points = []
+
         # Camera intrinsics
         fx = 640 / (2 * np.tan(1.089 / 2))
         fy = fx
@@ -599,97 +603,106 @@ class LaneDetectionNode(Node):
         cy = 240
         camera_height = 0.315
         camera_pitch = 0.0
-        
+
         marker_id = 0
-        
+
         for line in lines:
-            line = line[0] # Unwrap
+            line = line[0]   # Unwrap
             x1, y1, x2, y2 = line
-            
+
+            # Decide whether this line is on the left or right side of the image
+            u_mid = 0.5 * (x1 + x2)
+            is_left_lane = u_mid < cx
+
             # Calculate line parameters
             dx = x2 - x1
             dy = y2 - y1
             line_len = np.sqrt(dx**2 + dy**2)
-            
+
             if line_len < 1.0:
                 continue
-            
-            # Sample points along the line every 0.1 meters in 3D space
-            num_markers = max(int(line_len / 5.0), 2)  # Sample every ~5 pixels
-            
+
+            num_markers = max(int(line_len / 5.0), 2)
+
             for t in np.linspace(0, 1, num_markers):
                 u = int(x1 + t * dx)
                 v = int(y1 + t * dy)
-                
+
                 if not (0 <= u < 640 and 0 <= v < 480):
                     continue
-                
-                # Get 3D position using depth or ground plane
+
                 x_3d, y_3d, z_3d = None, None, None
-                
+
                 if self.latest_depth_image is not None:
                     d = self.latest_depth_image[v, u]
                     if not np.isnan(d) and not np.isinf(d) and 0.1 < d < 10.0:
-                        # Use actual depth
                         z_3d = float(d)
                         x_3d = float((u - cx) * z_3d / fx)
                         y_3d = float((v - cy) * z_3d / fy)
-                
-                # Fallback to ground plane projection
+
                 if x_3d is None:
                     ray_x = (u - cx) / fx
                     ray_y = (v - cy) / fy
                     ray_z = 1.0
-                    
+
                     ray_len = math.sqrt(ray_x**2 + ray_y**2 + ray_z**2)
                     ray_x /= ray_len
                     ray_y /= ray_len
                     ray_z /= ray_len
-                    
+
                     ray_y_rot = ray_y * math.cos(camera_pitch) - ray_z * math.sin(camera_pitch)
                     ray_z_rot = ray_y * math.sin(camera_pitch) + ray_z * math.cos(camera_pitch)
-                    
+
                     if abs(ray_y_rot) > 0.01:
                         t_intersect = camera_height / ray_y_rot
                         if 0.3 < t_intersect < 8.0:
                             z_3d = float(t_intersect * ray_z_rot)
                             x_3d = float(t_intersect * ray_x)
                             y_3d = float(t_intersect * ray_y_rot)
-                
+
                 if x_3d is None:
                     continue
-                
-                # Create cube marker at this position
+
+                # Store point for control logic
+                point = (x_3d, y_3d, z_3d)
+                if is_left_lane:
+                    self.left_lane_points.append(point)
+                else:
+                    self.right_lane_points.append(point)
+
                 marker = Marker()
                 marker.header = header
-                marker.ns = 'lane_segments'
                 marker.id = marker_id
                 marker.type = Marker.CUBE
                 marker.action = Marker.ADD
-                
-                # Position in 3D space (camera optical frame)
+
+                if is_left_lane:
+                    marker.ns = 'left_lane'
+                    marker.color.r = 0.0
+                    marker.color.g = 1.0
+                    marker.color.b = 0.0
+                else:
+                    marker.ns = 'right_lane'
+                    marker.color.r = 1.0
+                    marker.color.g = 1.0
+                    marker.color.b = 0.0
+
                 marker.pose.position.x = x_3d
                 marker.pose.position.y = y_3d
                 marker.pose.position.z = z_3d
                 marker.pose.orientation.w = 1.0
-                
-                # Size of each cube (make lanes visible)
+
                 marker.scale.x = 0.08
                 marker.scale.y = 0.08
                 marker.scale.z = 0.05
-                
-                # Yellow color for lane markers
-                marker.color.r = 1.0
-                marker.color.g = 1.0
-                marker.color.b = 0.0
                 marker.color.a = 0.9
-                
+
                 marker.lifetime.sec = 0
-                marker.lifetime.nanosec = 500000000  # 0.5s
-                
+                marker.lifetime.nanosec = 500000000
+
                 marker_array.markers.append(marker)
                 marker_id += 1
-        
+
         self.marker_pub.publish(marker_array)
     
     # Deprecated methods removed (image_y_to_distance, etc)

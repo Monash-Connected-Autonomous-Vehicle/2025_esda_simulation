@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import rospy
+
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from visualization_msgs.msg import MarkerArray
@@ -22,16 +22,23 @@ class TrackFollower(Node):
     def __init__(self):
         super().__init__('track_follower')
 
+        # Declaring various topics and frames
+        self.declare_parameter('lidar_topic', '/scan')
+        self.declare_parameter('map_topic', '/map')
+        self.declare_parameter('robot_frame', 'base_link')
+        self.declare_parameter('frame_id', 'map')
 
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
         self.goal_distance_threshold = 0.5  # Distance threshold to switch to goal navigation
         self.current_goal = None  # Placeholder for the current goal position
+
+        self.left_lane = []
+        self.right_lane = []
 
         # Subscribes to LiDAR laser scan data
         self.lidar_subscriber = self.create_subscription(
             LaserScan, 
-            '/scan', 
+            self.get_parameter('lidar_topic').get_parameter_value().string_value, 
             self.lidar_listener_callback, 
             10
         )
@@ -44,8 +51,40 @@ class TrackFollower(Node):
             10
         )
 
+        # Creates a timer to periodically compute the centreline and desired heading based on the latest LiDAR and lane detection data
+        self.timer = self.create_timer(0.1, self.lane_timer_callback)
 
-    
+        print("Track Follower node initialized and subscribed to LiDAR and lane detection topics.")
+
+
+    def lane_timer_callback(self):
+        # This timer callback will be called periodically to compute the centreline and desired heading based on the latest LiDAR and lane detection data. It will then publish the appropriate cmd_vel to navigate towards the goal.
+        
+        # No centre line if we don't have both left and right lane points, so we can't compute a desired heading or navigate towards the goal without a centreline to follow. We will need to wait until we have both left and right lane points before we can compute the centreline and desired heading.
+        if not self.left_lane or not self.right_lane:
+            return
+        
+        centreline = self.compute_centreline()
+
+        if not centreline:
+            return
+        
+        # For debugging purposes, we will print out the computed centreline points and the number of points in the centreline. This will help us verify that we are correctly computing the centreline from the lane detection data. We will also check that we are correctly matching points from the left and right lanes to compute the centreline points, and that we are only considering matches that are within a certain distance along the track to ensure we are matching points that are close enough together.
+        idx = min(3, len(centreline) - 1)
+        target_x, target_y, target_z = centreline[idx]
+
+        # Experiemtn with this or target_x
+        steering_error = math.atan2(target_y, target_x)
+
+        cmd = Twist()
+        cmd.linear.x = 0.5  # Set a constant forward speed, this can be adjusted based on the distance to the target or other factors
+        cmd.angular.z = -1.0 * steering_error  # Proportional control for steering based on the error to the target
+
+
+        print(f"The centreline points are: {centreline}")
+        print(f"Computed centreline with {len(centreline)} points.")
+        # Here we would also compute the desired heading based on the centreline and LiDAR data, and then publish the cmd_vel to navigate towards the goal. This is where we would implement the logic to switch to a different navigation strategy when we are within a certain distance to the goal.
+
     def lidar_listener_callback(self, msg):
         # Access LiDAR data from the LaserScan message
         ranges = msg.ranges
@@ -54,6 +93,89 @@ class TrackFollower(Node):
         # Access lane detection data from the MarkerArray message
         markers = msg.markers
 
+        left_points = []
+        right_points = []
+
+        for marker in msg.markers:
+            x = marker.pose.position.x
+            y = marker.pose.position.y
+            z = marker.pose.position.z
+
+            point = (x, y, z)
+
+            if marker.ns == 'left_lane':
+                left_points.append(point)
+            elif marker.ns == 'right_lane':
+                right_points.append(point)
+        
+        self.left_lane = left_points
+        self.right_lane = right_points
+
+        print(len(self.left_lane))
+        print(f"len(self.right_lane): {len(self.right_lane)}")
+
+    def compute_centreline(self):
+        # Can't compute a centreline if we don't have both left and right lane points
+        if not self.left_lane or not self.right_lane:
+            return []
+
+        # Sort the lane points by their z-coordinate (distance along the track) to ensure we are matching points that are at similar positions along the track
+        left_sorted = sorted(self.left_lane, key=lambda p: p[2])
+        right_sorted = sorted(self.right_lane, key=lambda p: p[2])
+
+        # Determine which lane has fewer points to use as the primary for matching, to ensure we are not trying to match more points than we have in the other lane
+        if len(left_sorted) <= len(right_sorted):
+            primary = left_sorted
+            secondary = right_sorted
+            primary_is_left = True
+        else:
+            primary = right_sorted
+            secondary = left_sorted
+            primary_is_left = False
+
+        # Match points from the primary lane to the closest point in the secondary lane based on their z-coordinate (distance along the track) to compute the centreline points. We will only consider matches that are within a certain z-distance threshold to ensure we are matching points that are close enough along the track.
+        centreline = []
+        max_z_diff = 0.5
+
+        # For each point in the primary lane, find the closest point in the secondary lane based on their z-coordinate (distance along the track) and compute the centreline point as the midpoint between the two matched points. We will only consider matches that are within a certain z-distance threshold to ensure we are matching points that are close enough along the track.
+        for px, py, pz in primary:
+            best_match = None
+            best_diff = float('inf')
+
+            # Iterate through the secondary lane points to find the closest point based on z-coordinate (distance along the track)
+            for sx, sy, sz in secondary:
+                diff = abs(sz - pz)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_match = (sx, sy, sz)
+
+            # Only consider matches that are within the z-distance threshold to ensure we are matching points that are close enough along the track
+            if best_match is None or best_diff > max_z_diff:
+                continue
+
+            sx, sy, sz = best_match
+
+            if primary_is_left:
+                lx, ly, lz = px, py, pz
+                rx, ry, rz = sx, sy, sz
+            else:
+                lx, ly, lz = sx, sy, sz
+                rx, ry, rz = px, py, pz
+
+            centreline.append((
+                (lx + rx) / 2.0,
+                (ly + ry) / 2.0,
+                (lz + rz) / 2.0
+            ))
+
+        return centreline
+
+    def compute_desired_heading(self, scan_data):
+        # Implement logic to compute the desired heading based on LiDAR data and lane detection
+        # This could involve analyzing the gaps in the LiDAR data and the lane markers to determine the best direction to follow
+
+        pass
+
     def get_track_direction(self, scan_data):
         # Implement logic to determine the track direction based on LiDAR data
 
@@ -61,12 +183,6 @@ class TrackFollower(Node):
 
 
 
-    def scan_callback(self, scan_data):
-        # Process laser scan data and implement follow the gap logic here
-        # This is where you would integrate the follow_the_gap algorithm
-
-
-        pass
 
     def navigate_to_goal(self):
         # Implement navigation logic to move towards the current goal
@@ -79,3 +195,6 @@ def main(args=None):
     rclpy.spin(track_follower)
     track_follower.destroy_node()
     rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

@@ -15,6 +15,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, Twist 
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid
+from visualization_msgs.msg import Marker, MarkerArray
 from sensor_msgs import msg
 from tf2_ros import Buffer, TransformListener, TransformException
 from sensor_msgs.msg import LaserScan
@@ -25,6 +26,8 @@ from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 
 import subprocess
+
+import matplotlib.pyplot as plt
 
 
 # Define the FollowTheGap class, which will implement the "Follow the Gap" algorithm for navigation
@@ -108,7 +111,7 @@ class FollowTheGap(Node):
         self.declare_parameter('max_speed', 0.45)
         self.declare_parameter('min_speed', 0.05)
         self.declare_parameter('max_turn_rate', 1.5)
-        self.declare_parameter('steering_gain', 1.2)
+        self.declare_parameter('steering_gain', 0.8)
         self.declare_parameter('forward_bias_gain', 0.35)
 
         self.lidar_topic = self.get_parameter('lidar_topic').get_parameter_value().string_value
@@ -164,6 +167,13 @@ class FollowTheGap(Node):
             10
         )
 
+        self.lane_subscriber = self.create_subscription(
+            MarkerArray, 
+            '/lane_markers', 
+            self.lane_listener_callback, 
+            10
+        )
+
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
         self.get_logger().info('FollowTheGap cmd_vel node initialised')
@@ -173,8 +183,125 @@ class FollowTheGap(Node):
         self.get_logger().info(f'FTG safety radius: {self.ftg_safety_radius:.3f} m')
         self.get_logger().info(f'Safe distance threshold: {self.safe_distance:.3f} m')
 
+    def footprint_is_map_safe(self, yaw, max_distance=1.5, step=0.10):
+        if self.latest_map is None:
+            return True
+
+        # half_width = self.robot_x_width / 2.0
+        # offsets = [-half_width, 0.0, half_width]
+        half_width = 0.4 * self.robot_x_width
+        offsets = [-half_width, 0.0, half_width]
+
+        d = step
+        while d <= max_distance:
+            cx = self.x + d * math.cos(yaw)
+            cy = self.y + d * math.sin(yaw)
+
+            # lateral vector
+            lx = -math.sin(yaw)
+            ly = math.cos(yaw)
+
+            for offset in offsets:
+                wx = cx + offset * lx
+                wy = cy + offset * ly
+
+                value = self.get_map_value(wx, wy)
+
+                if value is None or value >= 80:
+                    return False
+
+            d += step
+
+        return True
+
+    def gap_is_map_safe(self, yaw, max_distance=1.5, step=0.10):
+        if self.latest_map is None:
+            return True
+
+        d = step
+        while d <= max_distance:
+            wx = self.x + d * math.cos(yaw)
+            wy = self.y + d * math.sin(yaw)
+
+            value = self.get_map_value(wx, wy)
+
+            if value is None:
+                return False
+            if value >= 50:
+                return False
+
+            d += step
+
+        return True
+
+    def world_to_map(self, wx, wy):
+        if self.latest_map is None:
+            return None
+
+        info = self.latest_map.info
+        mx = int((wx - info.origin.position.x) / info.resolution)
+        my = int((wy - info.origin.position.y) / info.resolution)
+
+        if mx < 0 or my < 0 or mx >= info.width or my >= info.height:
+            return None
+
+        return mx, my
+
+    def map_index(self, mx, my):
+        return my * self.latest_map.info.width + mx
+
+    def get_map_value(self, wx, wy):
+        cell = self.world_to_map(wx, wy)
+        if cell is None:
+            return None
+
+        mx, my = cell
+        return self.latest_map.data[self.map_index(mx, my)]
+
+    def score_map_ray(self, yaw, max_distance=2.0, step=0.15):
+        if self.latest_map is None:
+            return 0.0
+
+        score = 0.0
+        d = step
+
+        while d <= max_distance:
+            wx = self.x + d * math.cos(yaw)
+            wy = self.y + d * math.sin(yaw)
+
+            value = self.get_map_value(wx, wy)
+
+            if value is None:
+                score -= 5.0
+                break
+            elif value >= 50:
+                score -= 8.0
+                break
+            elif value == -1:
+                score -= 1.0
+            else:
+                score += 0.5
+
+            d += step
+
+        return score
+        
     def occupancy_grid_callback(self, msg):
+        # Process occupancy grid data here if needed for the follow the gap algorithm, e.g., to evaluate gaps based on the occupancy grid information. This can be used to enhance the gap scoring by considering not only the LiDAR data but also the known map of the environment.
+        self.map_width = msg.info.width
+        self.map_height = msg.info.height
+        self.map_resolution = msg.info.resolution
+        self.map_origin_x = msg.info.origin.position.x
+        self.map_origin_y = msg.info.origin.position.y
+        self.map_data = np.array(msg.data, dtype=np.int16).reshape((self.map_height, self.map_width))
         self.latest_map = msg
+
+
+    def lane_listener_callback(self, msg):
+        # Access lane detection data from the MarkerArray message
+        markers = msg.markers
+        
+        # Process lane markers to assist in determining track direction or goal location if needed. This can
 
     def publish_cmd(self, linear_x, angular_z):
         cmd = Twist()
@@ -250,15 +377,21 @@ class FollowTheGap(Node):
 
             gap_angles = forward_angles[indices]
             gap_center_angle = float(np.mean(gap_angles))
-
             gap_depth = float(np.mean(extended_ranges[indices]))
             gap_width = len(indices)
 
-            # Prefer wider and deeper gaps, with a mild preference for forward motion
+            world_yaw = wrap_to_pi(self.theta + gap_center_angle)
+
+            if not self.footprint_is_map_safe(world_yaw, max_distance=min(gap_depth, 0.8), step=0.10):
+                continue
+
+            map_score = self.score_map_ray(world_yaw, max_distance=min(gap_depth, 2.0), step=0.15)
+
             score = (
-                1.5 * gap_depth
-                + 0.04 * gap_width
+                0.8 * gap_depth
+                + 0.015 * gap_width
                 - self.forward_bias_gain * abs(gap_center_angle)
+                + map_score
             )
 
             if score > best_score:
@@ -307,6 +440,18 @@ class FollowTheGap(Node):
         forward_ranges = ranges[forward_mask]
         forward_angles = angles[forward_mask]
 
+        left_sector = forward_ranges[forward_angles > 0.25]
+        right_sector = forward_ranges[forward_angles < -0.25]
+
+        left_min = float(np.min(left_sector)) if left_sector.size > 0 else msg.range_max
+        right_min = float(np.min(right_sector)) if right_sector.size > 0 else msg.range_max
+
+        side_bias = 0.0
+        if right_min < 1.0:
+            side_bias += 0.6 * (1.0 - right_min)
+        if left_min < 1.0:
+            side_bias -= 0.6 * (1.0 - left_min)
+
         if forward_ranges.size == 0:
             self.get_logger().warn('No forward-facing LiDAR points available')
             self.stop_robot()
@@ -335,7 +480,7 @@ class FollowTheGap(Node):
         gap_distance = float(extended_ranges[gap_mid_idx])
 
         # Steering directly toward the chosen gap
-        angular_z = self.steering_gain * gap_center_angle
+        angular_z = self.steering_gain * gap_center_angle + side_bias
         angular_z = max(-self.max_turn_rate, min(self.max_turn_rate, angular_z))
 
         # Base speed from clearance

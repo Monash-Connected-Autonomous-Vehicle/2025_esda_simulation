@@ -44,6 +44,8 @@ import subprocess
 
 # Wigglling problem - Robot keeps turning left and right --> 'S' shape --> Set limit threshold e,g, 2m or 3m, then follow centre of deepest gap until the robot is within the threshold distance to the goal, then switch to a different navigation strategy (e.g., A* or Dijkstra's) to navigate the remaining distance to the goal.
 
+# NOTE: This code is to be used in conjunction with track_follower.py. which will handle the overall track following around the entire map
+
 def load_robot_xml(filepath):
     result = subprocess.run(
         ['xacro', filepath],
@@ -358,6 +360,10 @@ class FollowTheGap(Node):
             return
 
         gap_center_angle, gap_indices = best_gap
+
+        # 🔥 Add this line here
+        gap_center_angle *= 0.5  # reduce turning aggressiveness
+
         gap_mid_idx = gap_indices[len(gap_indices) // 2]
         # gap_distance = float(extended_ranges[gap_mid_idx])
         gap_distance = min(float(extended_ranges[gap_mid_idx]), 1.5)

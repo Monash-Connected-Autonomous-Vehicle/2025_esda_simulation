@@ -2,21 +2,49 @@
 
 import math
 import numpy as np
+
 import xml.etree.ElementTree as ET
-import subprocess
 
 import rclpy
+from rclpy.action import ActionClient
+from rclpy.duration import Duration
 from rclpy.node import Node
 
-from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Twist
-from visualization_msgs.msg import MarkerArray
+from geometry_msgs.msg import PoseStamped
+from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid
+from sensor_msgs import msg
+from tf2_ros import Buffer, TransformListener
+from tf2_ros import TransformException
+from sensor_msgs.msg import LaserScan
 
 from itertools import groupby
+
 from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 
+import subprocess
+
+
+# Define the FollowTheGap class, which will implement the "Follow the Gap" algorithm for navigation
+# This algorithm does not seek out the longest gap, but rather the gap that is closest to the goal direction, which can be more efficient in certain scenarios.
+# Approach uses the Disparity Extender method to identify gaps in the occupancy grid and navigate through them towards the goal.
+# The algorithm will be implemented as a ROS2 node that subscribes to the occupancy grid and publishes navigation goals to the Nav2 stack.
+# Dispariities are gaps in the LiDAR scan data where 2 numbers next to each other differ majorly, indicating a potential gap in the environment. The algorithm will identify these gaps and evaluate them based on their alignment with the goal direction to determine the best path forward.
+
+# 1. Find disparities in lidar readings
+# 2. For each disparity, extend it half the width of the robot to find the gap
+# 3. Evaluate the gap based on its alignment with the goal direction
+# 4. Select the best gap and navigate towards it
+
+# Making sure that car doesn't hit a corner
+# 1. Scan all available LiDAR samples below -90 degrees and above 90 degrees
+# 2. If any of these samples are below a certain threshold, consider the path blocked... or if any point is below safe distance on side of car in the direction the car is going, stop turning and keep going straight
+# 3. If the path is blocked, stop the robot and re-evaluate the environment
+
+# Wigglling problem - Robot keeps turning left and right --> 'S' shape --> Set limit threshold e,g, 2m or 3m, then follow centre of deepest gap until the robot is within the threshold distance to the goal, then switch to a different navigation strategy (e.g., A* or Dijkstra's) to navigate the remaining distance to the goal.
+
+# NOTE: This code is to be used in conjunction with track_follower.py. which will handle the overall track following around the entire map
 
 def load_robot_xml(filepath):
     result = subprocess.run(
@@ -26,131 +54,88 @@ def load_robot_xml(filepath):
     )
     return result.stdout
 
-
 def extract_param_from_xml(xml_text, property_name='chassis_width'):
     root = ET.fromstring(xml_text)
 
+    # ---- 1. Try to find property (ONLY works if xacro NOT expanded) ----
     for elem in root.iter():
         tag = elem.tag.split('}')[-1]
+
         if tag == 'property' and elem.attrib.get('name') == property_name:
             try:
                 return float(elem.attrib.get('value'))
             except (TypeError, ValueError):
                 pass
 
+    # ---- 2. Fallback: extract from geometry (expanded XML) ----
     for elem in root.iter():
         tag = elem.tag.split('}')[-1]
+
         if tag == 'box':
             size = elem.attrib.get('size', '')
             parts = size.split()
+
             if len(parts) == 3:
                 try:
-                    return float(parts[1])  # y = width
+                    # x, y, z → width is y
+                    return float(parts[1])
                 except ValueError:
                     pass
 
     return None
 
-
 def wrap_to_pi(angle):
     return math.atan2(math.sin(angle), math.cos(angle))
-
 
 class FollowTheGap(Node):
     def __init__(self):
         super().__init__('follow_the_gap')
-
+        
         package_share = Path(get_package_share_directory('esda_simulation_2025'))
         robot_description_file = package_share / 'description' / 'robot_core_ref.xacro'
 
         self.declare_parameter('robot_description_file', str(robot_description_file))
+
+        # Declare parameters related to the map and navigation
+        self.declare_parameter('goal_pose', [10.0, 3.0, 0.0])  # [x, y, theta]
+        self.declare_parameter('map_topic', '/map')
+        self.declare_parameter('robot_frame', 'base_link')
+        self.declare_parameter('frame_id', 'map')
+
+        # Need to get the robot's pose from TF, so we set up a TF listener to get the robot's current position and orientation in the map frame. This will allow us to calculate the angle to the goal and evaluate the alignment of the identified gaps with the goal direction.
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        # Getting the parameters from the parameter server
+        self.map_topic = self.get_parameter('map_topic').get_parameter_value().string_value
+        self.robot_frame = self.get_parameter('robot_frame').get_parameter_value().string_value
+        self.frame_id = self.get_parameter('frame_id').get_parameter_value().string_value
+        self.goal_pose = self.get_parameter('goal_pose').get_parameter_value().double_array_value
+
+        # Declare parameters related to the Follow the Gap algorithm
         self.declare_parameter('lidar_topic', '/scan')
-        self.declare_parameter('cmd_vel_topic', '/cmd_vel')
-        self.declare_parameter('lane_marker_topic', '/lane_segments')
-        self.declare_parameter('occupancy_grid_topic', '/map')
-
-        # FTG parameters
-        self.declare_parameter('disparity_threshold', 0.5)
-        self.declare_parameter('safe_distance', 1.2)
-        self.declare_parameter('safety_margin', 0.1)
-        self.declare_parameter('forward_fov_deg', 120.0)
-
-        # Control parameters
-        self.declare_parameter('max_linear_speed', 0.7)
-        self.declare_parameter('min_linear_speed', 0.15)
-        self.declare_parameter('max_angular_speed', 1.0)
-        self.declare_parameter('steer_gain', 1.3)
-        self.declare_parameter('turn_slowdown_angle', 0.8)
-        self.declare_parameter('aggressiveness_scale', 0.5)
-
-        # Lane-follow parameters
-        self.declare_parameter('lookahead_distance', 2.0)
-        self.declare_parameter('lane_timeout_sec', 0.5)
-        self.declare_parameter('max_lane_preferred_angle_deg', 35.0)
-        self.declare_parameter('lane_blend_weight', 0.85)
-        self.declare_parameter('max_gap_angle_deg', 20.0)
-
-        # Occupancy-grid filtering parameters
-        self.declare_parameter('grid_projection_distance', 0.8)
-        self.declare_parameter('grid_unknown_is_blocked', True)
-        self.declare_parameter('grid_occupied_threshold', 80)
-        self.declare_parameter('grid_cost_penalty_scale', 2.0)
-        self.declare_parameter('grid_check_half_width_m', 0.25)
-
-        self.lidar_topic = self.get_parameter('lidar_topic').value
-        self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').value
-        self.lane_marker_topic = self.get_parameter('lane_marker_topic').value
-        self.occupancy_grid_topic = self.get_parameter('occupancy_grid_topic').value
-
-        robot_file = self.get_parameter('robot_description_file').value
+        robot_file = self.get_parameter('robot_description_file').get_parameter_value().string_value
         robot_xml = load_robot_xml(robot_file)
+        self.robot_x_width = extract_param_from_xml(robot_xml, 'chassis_width') # Chassis width
+        self.robot_y_width = extract_param_from_xml(robot_xml, 'chassis_length') # Chassis length
+        self.disparity_threshold = 0.5  # Threshold for identifying disparities in LiDAR data (in meters)
 
-        self.robot_x_width = extract_param_from_xml(robot_xml, 'chassis_width')
-        self.robot_y_width = extract_param_from_xml(robot_xml, 'chassis_length')
+        self.robot_radius = self.robot_x_width / 2.0  # Assuming the robot's width is the limiting factor for navigation
+        self.ftg_safety_radius = self.robot_radius + 0.1  # Adding a safety margin to the robot's radius ~ 0.35 meters total
 
-        if self.robot_x_width is None:
-            self.get_logger().warn("Could not extract chassis_width, defaulting to 0.5 m")
-            self.robot_x_width = 0.5
+        self.safe_distance = 2.5  # Minimum safe distance to obstacles (in meters). Used after extending disparities to determine if a gap is navigable.
 
-        if self.robot_y_width is None:
-            self.get_logger().warn("Could not extract chassis_length, defaulting to 0.7 m")
-            self.robot_y_width = 0.7
+        # Declare parameters related to the Disparity Extender method
+        self.x = 0.0
+        self.y = 0.0
+        self.theta = 0.0
 
-        self.disparity_threshold = float(self.get_parameter('disparity_threshold').value)
-        self.safe_distance = float(self.get_parameter('safe_distance').value)
-        self.safety_margin = float(self.get_parameter('safety_margin').value)
-        self.forward_fov_rad = math.radians(float(self.get_parameter('forward_fov_deg').value) / 2.0)
+        # Declaring the topic to subscribe to: navigate to pose
+        self.client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
-        self.robot_radius = self.robot_x_width / 2.0
-        self.ftg_safety_radius = self.robot_radius + self.safety_margin
+        self.lidar_topic = self.get_parameter('lidar_topic').get_parameter_value().string_value
 
-        self.max_linear_speed = float(self.get_parameter('max_linear_speed').value)
-        self.min_linear_speed = float(self.get_parameter('min_linear_speed').value)
-        self.max_angular_speed = float(self.get_parameter('max_angular_speed').value)
-        self.steer_gain = float(self.get_parameter('steer_gain').value)
-        self.turn_slowdown_angle = float(self.get_parameter('turn_slowdown_angle').value)
-        self.aggressiveness_scale = float(self.get_parameter('aggressiveness_scale').value)
-
-        self.lookahead_distance = float(self.get_parameter('lookahead_distance').value)
-        self.lane_timeout_sec = float(self.get_parameter('lane_timeout_sec').value)
-        self.max_lane_preferred_angle = math.radians(
-            float(self.get_parameter('max_lane_preferred_angle_deg').value)
-        )
-        self.lane_blend_weight = float(self.get_parameter('lane_blend_weight').value)
-        self.max_gap_angle = math.radians(float(self.get_parameter('max_gap_angle_deg').value))
-
-        self.grid_projection_distance = float(self.get_parameter('grid_projection_distance').value)
-        self.grid_unknown_is_blocked = bool(self.get_parameter('grid_unknown_is_blocked').value)
-        self.grid_occupied_threshold = int(self.get_parameter('grid_occupied_threshold').value)
-        self.grid_cost_penalty_scale = float(self.get_parameter('grid_cost_penalty_scale').value)
-        self.grid_check_half_width_m = float(self.get_parameter('grid_check_half_width_m').value)
-
-        self.latest_lane_angle = None
-        self.latest_lane_confidence = 0.0
-        self.last_lane_time = None
-
-        self.latest_grid = None
-
+        # Creating the subscriber for the occupancy grid
         self.scan_subscriber = self.create_subscription(
             LaserScan,
             self.lidar_topic,
@@ -158,231 +143,67 @@ class FollowTheGap(Node):
             10
         )
 
-        self.lane_subscriber = self.create_subscription(
-            MarkerArray,
-            self.lane_marker_topic,
-            self.lane_callback,
-            10
-        )
+        # Parameters for sending goals to Nav2
+        self.last_goal = None
+        self.last_goal_time = self.get_clock().now()
+        self.goal_update_period = 1.0  # seconds
+        self.min_goal_shift = 0.5      # metres
+        self.min_yaw_shift = 0.35      # radians
 
-        self.grid_subscriber = self.create_subscription(
-            OccupancyGrid,
-            self.occupancy_grid_topic,
-            self.grid_callback,
-            10
-        )
+        self.get_logger().info('FollowTheGap node has been initialized with the following parameters:')
+        self.get_logger().info(f"Robot Description File: {self.get_parameter('robot_description_file').get_parameter_value().string_value}")
+        self.get_logger().info(f"Robot Width: {self.robot_x_width}")
+        self.get_logger().info(f"Robot Length: {self.robot_y_width}")
+        self.get_logger().info(f"Robot Radius: {self.robot_radius}")
+        self.get_logger().info(f"FTG Safety Radius: {self.ftg_safety_radius}")
 
-        self.cmd_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
+    
+    
+    def send_navigation_goal(self, target_x, target_y, target_theta):
+        # This function sends a navigation goal to the Nav2 stack to navigate towards the specified target position and orientation. It constructs a NavigateToPose action goal with the target pose and sends it to the action server, allowing the robot to navigate towards the desired location.
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose.header.frame_id = self.frame_id
+        goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
+        goal_msg.pose.pose.position.x = target_x
+        goal_msg.pose.pose.position.y = target_y
+        goal_msg.pose.pose.position.z = 0.0
 
-        self.get_logger().info('FollowTheGap + lane guidance + occupancy grid node initialised')
-        self.get_logger().info(f"LiDAR topic: {self.lidar_topic}")
-        self.get_logger().info(f"Lane marker topic: {self.lane_marker_topic}")
-        self.get_logger().info(f"Occupancy grid topic: {self.occupancy_grid_topic}")
-        self.get_logger().info(f"cmd_vel topic: {self.cmd_vel_topic}")
+        # Convert target_theta (yaw) to quaternion
+        qz = math.sin(target_theta / 2.0)
+        qw = math.cos(target_theta / 2.0)
+        goal_msg.pose.pose.orientation.z = qz
+        goal_msg.pose.pose.orientation.w = qw
 
-    def publish_stop(self):
-        cmd = Twist()
-        self.cmd_pub.publish(cmd)
+        self.client.wait_for_server()
+        self.client.send_goal_async(goal_msg)
 
-    def grid_callback(self, msg: OccupancyGrid):
-        self.latest_grid = msg
-
-    def marker_to_xy_points(self, marker):
-        pts = []
-        for p in marker.points:
-            pts.append((float(p.x), float(p.y)))
-        return pts
-
-    def infer_lane_side(self, marker, points):
-        ns = marker.ns.lower() if marker.ns else ""
-        if 'left' in ns:
-            return 'left'
-        if 'right' in ns:
-            return 'right'
-
-        if not points:
-            return None
-
-        mean_y = float(np.mean([p[1] for p in points]))
-        if mean_y > 0.0:
-            return 'left'
-        if mean_y < 0.0:
-            return 'right'
-        return None
-
-    def choose_point_near_lookahead(self, points, lookahead_distance):
-        front_points = [(x, y) for (x, y) in points if x > 0.2]
-        if not front_points:
-            return None
-
-        best_pt = min(front_points, key=lambda p: abs(p[0] - lookahead_distance))
-        return best_pt
-
-    def lane_callback(self, msg: MarkerArray):
-        left_candidates = []
-        right_candidates = []
-
-        for marker in msg.markers:
-            pts = self.marker_to_xy_points(marker)
-            if len(pts) < 2:
-                continue
-
-            side = self.infer_lane_side(marker, pts)
-            if side == 'left':
-                left_candidates.extend(pts)
-            elif side == 'right':
-                right_candidates.extend(pts)
-
-        if len(left_candidates) < 2 or len(right_candidates) < 2:
-            self.latest_lane_angle = None
-            self.latest_lane_confidence = 0.0
-            return
-
-        left_pt = self.choose_point_near_lookahead(left_candidates, self.lookahead_distance)
-        right_pt = self.choose_point_near_lookahead(right_candidates, self.lookahead_distance)
-
-        if left_pt is None or right_pt is None:
-            self.latest_lane_angle = None
-            self.latest_lane_confidence = 0.0
-            return
-
-        cx = 0.5 * (left_pt[0] + right_pt[0])
-        cy = 0.5 * (left_pt[1] + right_pt[1])
-
-        if cx <= 0.05:
-            self.latest_lane_angle = None
-            self.latest_lane_confidence = 0.0
-            return
-
-        lane_angle = math.atan2(cy, cx)
-        lane_angle = max(-self.max_lane_preferred_angle, min(self.max_lane_preferred_angle, lane_angle))
-
-        lane_width = abs(left_pt[1] - right_pt[1])
-        confidence = 1.0
-        if lane_width < self.robot_x_width * 0.8:
-            confidence = 0.4
-        elif lane_width < self.robot_x_width * 1.2:
-            confidence = 0.7
-
-        self.latest_lane_angle = lane_angle
-        self.latest_lane_confidence = confidence
-        self.last_lane_time = self.get_clock().now()
-
-    def lane_is_fresh(self):
-        if self.last_lane_time is None:
-            return False
-        age = (self.get_clock().now() - self.last_lane_time).nanoseconds / 1e9
-        return age <= self.lane_timeout_sec
-
-    def get_preferred_angle(self):
-        if self.lane_is_fresh() and self.latest_lane_angle is not None:
-            w = max(0.0, min(1.0, self.lane_blend_weight * self.latest_lane_confidence))
-            return w * self.latest_lane_angle
-        return 0.0
-
-    def world_to_grid(self, x_world, y_world):
-        if self.latest_grid is None:
-            return None
-
-        info = self.latest_grid.info
-        origin_x = info.origin.position.x
-        origin_y = info.origin.position.y
-        resolution = info.resolution
-
-        gx = int((x_world - origin_x) / resolution)
-        gy = int((y_world - origin_y) / resolution)
-
-        if gx < 0 or gy < 0 or gx >= info.width or gy >= info.height:
-            return None
-
-        return gx, gy
-
-    def get_grid_value(self, gx, gy):
-        if self.latest_grid is None:
-            return None
-
-        info = self.latest_grid.info
-        if gx < 0 or gy < 0 or gx >= info.width or gy >= info.height:
-            return None
-
-        idx = gy * info.width + gx
-        return int(self.latest_grid.data[idx])
-
-    def evaluate_projected_gap_cell(self, gap_angle):
-        """
-        Project a short point ahead in robot-local coordinates and check a few nearby
-        cells around it in the occupancy grid.
-
-        Assumes the occupancy grid and lane/robot-local geometry are aligned enough
-        for this to be meaningful. Best if your grid is effectively in the same
-        frame you reason about driving in.
-        """
-        if self.latest_grid is None:
-            return True, 0.0
-
-        x_proj = self.grid_projection_distance * math.cos(gap_angle)
-        y_proj = self.grid_projection_distance * math.sin(gap_angle)
-
-        sample_offsets = [0.0, -self.grid_check_half_width_m, self.grid_check_half_width_m]
-        worst_value = 0
-
-        for lateral in sample_offsets:
-            sx = x_proj
-            sy = y_proj + lateral
-
-            grid_xy = self.world_to_grid(sx, sy)
-            if grid_xy is None:
-                return False, float('inf')
-
-            gx, gy = grid_xy
-            cell_value = self.get_grid_value(gx, gy)
-
-            if cell_value is None:
-                return False, float('inf')
-
-            if cell_value == -1 and self.grid_unknown_is_blocked:
-                return False, float('inf')
-
-            if cell_value >= self.grid_occupied_threshold:
-                return False, float('inf')
-
-            if cell_value > worst_value:
-                worst_value = cell_value
-
-        penalty = self.grid_cost_penalty_scale * (worst_value / 100.0)
-        return True, penalty
-
-    def score_gap(self, safe_groups, forward_angles, preferred_angle=0.0):
+    def score_gap(self, extended_ranges, safe_groups, safe_masks, forward_angles, goal_angle):
+        # This function takes in the extended ranges, safe groups, safe masks and goal angle, and evaluates the identified gaps based on their alignment with the goal direction. It calculates a score for each gap based on how closely it aligns with the goal angle, and returns the best gap to navigate towards.
         best_score = float('inf')
         best_gap = None
 
         for (is_safe, indices) in safe_groups:
-            if not is_safe or not indices:
+            if not is_safe:
                 continue
 
             gap_angles = forward_angles[indices]
-            gap_center_angle = float(np.mean(gap_angles))
+            gap_center_angle = np.mean(gap_angles)
 
-            if abs(gap_center_angle) > self.max_gap_angle:
-                continue
+            # Calculate the score based on the absolute difference between the gap center angle and the goal angle
+            score = abs(wrap_to_pi(gap_center_angle - goal_angle))
 
-            gap_score = abs(wrap_to_pi(gap_center_angle - preferred_angle))
-
-            grid_ok, grid_penalty = self.evaluate_projected_gap_cell(gap_center_angle)
-            if not grid_ok:
-                continue
-
-            total_score = gap_score + grid_penalty
-
-            if total_score < best_score:
-                best_score = total_score
+            if score < best_score:
+                best_score = score
                 best_gap = (gap_center_angle, indices)
 
         return best_gap
 
     def find_disparities(self, lidar_data):
+        # This function finds the disparities in the LiDAR data, which are points where the distance readings change significantly, indicating a potential gap in the environment.
+
         disparities = []
 
+        # Need at least 2 points to compare neighbours
         if len(lidar_data) < 2:
             return disparities
 
@@ -401,8 +222,9 @@ class FollowTheGap(Node):
                 })
 
         return disparities
-
+    
     def extend_disparity(self, forward_ranges, disparities, angle_increment):
+        # This function takes the identified disparities and extends them by marking neighboring points as unsafe based on the robot's safety radius. This helps to identify the full extent of the gap and ensures that the robot does not attempt to navigate through a space that is too narrow.
         extended_ranges = np.array(forward_ranges, copy=True)
 
         if len(extended_ranges) == 0 or len(disparities) == 0:
@@ -414,13 +236,18 @@ class FollowTheGap(Node):
             left_distance = disparity['left_distance']
             right_distance = disparity['right_distance']
 
+            # Avoid divide-by-zero / nonsense values
             if closer_distance <= 0.0 or angle_increment <= 0.0:
                 continue
 
+            # Convert safety radius (m) into angular width, then into number of scan points
             points_to_extend = int(
                 math.ceil((self.ftg_safety_radius / closer_distance) / angle_increment)
             )
 
+            # Decide which way to extend:
+            # if left side is closer obstacle, extend to the left
+            # if right side is closer obstacle, extend to the right
             if left_distance < right_distance:
                 start = max(0, closer_index - points_to_extend)
                 end = closer_index + 1
@@ -428,6 +255,7 @@ class FollowTheGap(Node):
                 start = closer_index
                 end = min(len(extended_ranges), closer_index + points_to_extend + 1)
 
+            # Mark those neighbouring points as equally unsafe
             extended_ranges[start:end] = np.minimum(
                 extended_ranges[start:end],
                 closer_distance
@@ -435,96 +263,151 @@ class FollowTheGap(Node):
 
         return extended_ranges
 
-    def scan_callback(self, msg: LaserScan):
-        ranges = np.array(msg.ranges, dtype=np.float32)
-
-        if ranges.size == 0:
-            self.get_logger().warn("Received empty LaserScan")
-            self.publish_stop()
+    def scan_callback(self, msg):
+        # This callback will be triggered whenever a new LiDAR scan is received
+        # The msg parameter will contain the LaserScan data, which can be processed to find disparities and navigate towards the goal
+        
+        # Get the robot transform to determine the robot's current position and orientation in the map frame. This is necessary for calculating the angle to the goal and evaluating the alignment of the identified gaps with the goal direction.
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.frame_id,
+                self.robot_frame,
+                rclpy.time.Time(),
+                timeout=Duration(seconds=1.0)
+            )
+            self.x = transform.transform.translation.x
+            self.y = transform.transform.translation.y
+            # Convert quaternion to yaw angle
+            q = transform.transform.rotation
+            self.theta = math.atan2(
+                2.0 * (q.w * q.z + q.x * q.y), 
+                1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+            )
+        
+        except TransformException as e:
+            self.get_logger().warn(f"Could not get transform: {e}")
             return
 
+        # 1. Convert ranges to numpy array for easier processing
+        ranges = np.array(msg.ranges, dtype=np.float32)
+
+        # 2. Guard against empty scans
+        if ranges.size == 0:
+            self.get_logger().warn("Received empty LaserScan")
+            return
+
+        # 3. Replace invalid values
         ranges[np.isnan(ranges)] = msg.range_max
         ranges[np.isinf(ranges)] = msg.range_max
+
+        # 4. Clip to valid sensor range
         ranges = np.clip(ranges, msg.range_min, msg.range_max)
 
+        # 5. Compute angle for each scan point
         angles = msg.angle_min + np.arange(ranges.size) * msg.angle_increment
 
-        forward_mask = (angles >= -self.forward_fov_rad) & (angles <= self.forward_fov_rad)
+        # 6. Keep only forward-facing scan points
+        forward_mask = (angles >= -math.pi / 2.0) & (angles <= math.pi / 2.0)
         forward_ranges = ranges[forward_mask]
         forward_angles = angles[forward_mask]
 
         if forward_ranges.size == 0:
             self.get_logger().warn("No forward-facing LiDAR points available")
-            self.publish_stop()
             return
 
+        # 7. Find disparities in the forward-facing LiDAR data
         disparities = self.find_disparities(forward_ranges)
+        print(f"Disparities: {disparities}")
+
+
+        # 8. Basic debug information
+        min_idx = int(np.argmin(forward_ranges))
+        min_range = float(forward_ranges[min_idx])
+        min_angle = float(forward_angles[min_idx])
+
+        # 9. Extend the disparities to find potential gaps
         extended_ranges = self.extend_disparity(forward_ranges, disparities, msg.angle_increment)
+        print(f"Extended ranges: {extended_ranges}")
 
+
+        # 10. Find gaps gaps if whether the extended ranges are greater than the safe distance, and evaluate them based on their alignment with the goal direction to determine the best path forward. This part of the implementation will involve calculating the angle to the goal and comparing it with the angles of the identified gaps to select the most suitable one for navigation.
         safe_mask = extended_ranges >= self.safe_distance
+        safe_angles = extended_ranges[safe_mask]
+        safe_ranges = extended_ranges[safe_mask]
 
+        # 11. Group the gaps together
         safe_groups = [
-            (key, [idx for idx, _ in group])
-            for key, group in groupby(enumerate(safe_mask), key=lambda x: x[1])
+            (key, [idx for idx, val in group])
+            for key, group in groupby(enumerate(safe_mask), key = lambda x: x[1])
+
         ]
+        
+        print(f"Safe groups: {safe_groups}")
 
-        preferred_angle = self.get_preferred_angle()
+        # 12. Evaluate the gaps based on their alignment with the goal direction to determine the best path forward. This will involve calculating the angle to the goal and comparing it with the angles of the identified gaps to select the most suitable one for navigation.
+        goal_angle_world = math.atan2(self.goal_pose[1] - self.y, self.goal_pose[0] - self.x)
 
-        best_gap = self.score_gap(
-            safe_groups=safe_groups,
-            forward_angles=forward_angles,
-            preferred_angle=preferred_angle
-        )
+        # convert world goal direction into robot-relative direction
+        goal_angle_robot = wrap_to_pi(goal_angle_world - self.theta)
 
+        best_gap = self.score_gap(extended_ranges, safe_groups, safe_mask, forward_angles, goal_angle_robot)
+
+        print(f"Best gap: {best_gap}")
+
+        # 13. If a suitable gap is found, publish a navigation goal towards the center of that gap. This will involve calculating the target position based on the angle and distance of the best gap, and sending a goal to the Nav2 stack to navigate towards that position. 
         if best_gap is None:
-            self.get_logger().warn("No safe gap found after occupancy-grid filtering")
-            self.publish_stop()
+            self.get_logger().warn("No safe gap found")
             return
 
         gap_center_angle, gap_indices = best_gap
-        gap_center_angle *= self.aggressiveness_scale
+
+        # 🔥 Add this line here
+        gap_center_angle *= 0.5  # reduce turning aggressiveness
 
         gap_mid_idx = gap_indices[len(gap_indices) // 2]
+        # gap_distance = float(extended_ranges[gap_mid_idx])
         gap_distance = min(float(extended_ranges[gap_mid_idx]), 1.5)
 
-        angular_z = self.steer_gain * gap_center_angle
-        angular_z = max(-self.max_angular_speed, min(self.max_angular_speed, angular_z))
+        orientation = wrap_to_pi(self.theta + gap_center_angle)
+        target_x = self.x + gap_distance * math.cos(orientation)
+        target_y = self.y + gap_distance * math.sin(orientation)
 
-        if self.turn_slowdown_angle <= 0.0:
-            speed_scale = 1.0
+        now = self.get_clock().now()
+        time_since_last = (now - self.last_goal_time).nanoseconds / 1e9
+
+        send_new_goal = False
+
+        if self.last_goal is None:
+            send_new_goal = True
         else:
-            speed_scale = max(0.0, 1.0 - abs(gap_center_angle) / self.turn_slowdown_angle)
+            last_x, last_y, last_yaw = self.last_goal
+            dist_shift = math.hypot(target_x - last_x, target_y - last_y)
+            yaw_shift = abs(wrap_to_pi(orientation - last_yaw))
 
-        linear_x = self.min_linear_speed + (self.max_linear_speed - self.min_linear_speed) * speed_scale
+            if time_since_last >= self.goal_update_period and (
+                dist_shift > self.min_goal_shift or yaw_shift > self.min_yaw_shift
+            ):
+                send_new_goal = True
 
-        if gap_distance < 1.0:
-            linear_x *= 0.6
+        if send_new_goal:
+            self.send_navigation_goal(target_x, target_y, orientation)
+            self.last_goal = (target_x, target_y, orientation)
+            self.last_goal_time = now
 
-        if not self.lane_is_fresh() or self.latest_lane_angle is None:
-            linear_x *= 0.6
+        # orientation = self.theta
+        # self.send_navigation_goal(target_x, target_y, orientation)
 
-        cmd = Twist()
-        cmd.linear.x = linear_x
-        cmd.angular.z = angular_z
-        self.cmd_pub.publish(cmd)
+        print(f"Target position: ({target_x:.2f}, {target_y:.2f}), orientation: {math.degrees(orientation):.1f} degrees")
 
-        lane_deg = math.degrees(preferred_angle)
-        gap_deg = math.degrees(gap_center_angle)
-        self.get_logger().info(
-            f"lane_pref={lane_deg:.1f} deg, "
-            f"gap_angle={gap_deg:.1f} deg, "
-            f"gap_dist={gap_distance:.2f} m, "
-            f"v={linear_x:.2f}, w={angular_z:.2f}"
-        )
+        
 
 
 def main():
+    # Launches the FollowTheGap node and keeps it running until shutdown
     rclpy.init()
     node = FollowTheGap()
     rclpy.spin(node)
-    node.destroy_node()
     rclpy.shutdown()
-
 
 if __name__ == "__main__":
     main()

@@ -43,13 +43,20 @@ class TrackFollower(Node):
             self.lane_listener_callback, 
             10
         )
+
+
     
     def lidar_listener_callback(self, msg):
         # Access LiDAR data from the LaserScan message
         ranges = msg.ranges
 
+    def lane_listener_callback(self, msg):
+        # Access lane detection data from the MarkerArray message
+        markers = msg.markers
+
     def get_track_direction(self, scan_data):
         # Implement logic to determine the track direction based on LiDAR data
+
         pass
 
 

@@ -14,6 +14,10 @@
 #   - Goal navigation: If the robot is within a certain distance to the goal, it will switch to a goal navigation strategy (e.g. using the Nav2 stack) to navigate directly towards the goal.
 #   - Distance to goal < threshold --> Robot switches to goal navigation
 
+# Ultimately, this code basically combines the lane following and follow the gap algorithms into a single node that can switch between the two based on the current state of the robot and the environment. It also incorporates a goal navigation strategy for when the robot is close to the goal, allowing it to navigate directly towards the goal when appropriate.
+# FTG for close objects
+# track_follower for when lanes are detected and no close obstacles for general palnner
+
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from visualization_msgs.msg import MarkerArray
@@ -23,19 +27,58 @@ import math
 import rclpy
 from rclpy.node import Node
 
+from enum import Enum
+
+# Define an enumeration for the different navigation states of the robot. This will help us manage the different navigation strategies in a clear and organized way, allowing us to easily switch between them based on the current state of the robot and the environment.
+class NavigationState(Enum):
+    CENTRELINE_FOLLOWING = 1
+    FOLLOW_THE_GAP = 2
+    GOAL_NAVIGATION = 3
+    RECOVERY = 4  # Added a recovery state for handling situations where the robot is stuck or encounters an unexpected situation
+
+
 class BehaviourTree(Node):
     def __init__(self):
         super().__init__('behaviour_tree')
-    
-    def lane_callback(self, msg):
-        # Process lane detection data from the MarkerArray message to determine if lanes are detected and to assist in determining track direction or goal location if needed.
-        markers = msg.markers
-        # Implement logic to determine if lanes are detected and to extract relevant information for navigation decisions.
 
-    def lidar_callback(self, msg):
-        # Process LiDAR data from the LaserScan message to determine if there are obstacles in front of the robot and to assist in determining track direction or goal location if needed.
-        ranges = msg.ranges
-        # Implement logic to determine if there are obstacles in front of the robot and to extract relevant information for navigation decisions.
+        # Subscribing to different topics
+        self.declare_parameter('lidar_topic', '/scan')
+        self.declare_parameter('map_topic', '/map')
+        self.declare_parameter('robot_frame', 'base_link')
+        self.declare_parameter('frame_id', 'map')   
+
+        # Subscribes to the track follower node
+        self.track_follower_subscription = self.create_subscription(
+            Twist, 
+            '/cmd_vel', 
+            self.track_follower_callback, 
+            10
+        )
+
+
+        
+        # Start the robot in the centreline following state by default. We will switch to other states based on the sensor data and the distance to the goal.
+        self.current_state = NavigationState.CENTRELINE_FOLLOWING
+
+
+        # Defining the timer control loop period
+        timer_period = 0.2  # seconds
+        self.timer = self.create_timer(timer_period, self.control_loop)
 
     
     
+    def control_loop(self):
+        # This is the main control loop that will be called periodically by the timer. In this loop, we will check the current state of the robot and the environment based on the latest sensor data, and we will switch between different navigation strategies accordingly. We will also implement a recovery strategy for handling situations where the robot is stuck or encounters an unexpected situation.
+        if self.current_state == NavigationState.CENTRELINE_FOLLOWING:
+            # Implement logic for centreline following navigation strategy
+
+            pass
+        elif self.current_state == NavigationState.FOLLOW_THE_GAP:
+            # Implement logic for follow the gap navigation strategy
+            pass
+        elif self.current_state == NavigationState.GOAL_NAVIGATION:
+            # Implement logic for goal navigation strategy
+            pass
+        elif self.current_state == NavigationState.RECOVERY:
+            # Implement logic for recovery strategy to handle situations where the robot is stuck or encounters an unexpected situation
+            pass

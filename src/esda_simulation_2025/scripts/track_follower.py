@@ -28,7 +28,11 @@ class TrackFollower(Node):
         self.declare_parameter('robot_frame', 'base_link')
         self.declare_parameter('frame_id', 'map')
 
-        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.declare_parameter('test_track_follower_itself', True)  # Parameter to control whether to test the track follower node itself or to use the behaviour tree to manage it. This will allow us to test the track follower node in isolation without needing to run the entire behaviour tree, which can be useful for debugging and development purposes.
+
+        self.test_track_follower_itself = self.get_parameter('test_track_follower_itself').get_parameter_value().bool_value
+
+        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10) 
         self.goal_distance_threshold = 0.5  # Distance threshold to switch to goal navigation
         self.current_goal = None  # Placeholder for the current goal position
 
@@ -51,6 +55,13 @@ class TrackFollower(Node):
             10
         )
 
+        self.behaviour_tree_subscriber = self.create_subscription(
+            Twist, 
+            '/cmd_vel', 
+            self.track_follower_callback, 
+            10
+        )
+
         # Creates a timer to periodically compute the centreline and desired heading based on the latest LiDAR and lane detection data
         self.timer = self.create_timer(0.1, self.lane_timer_callback)
 
@@ -70,16 +81,22 @@ class TrackFollower(Node):
             return
         
         # For debugging purposes, we will print out the computed centreline points and the number of points in the centreline. This will help us verify that we are correctly computing the centreline from the lane detection data. We will also check that we are correctly matching points from the left and right lanes to compute the centreline points, and that we are only considering matches that are within a certain distance along the track to ensure we are matching points that are close enough together.
-        idx = min(3, len(centreline) - 1)
+        idx = min(8, len(centreline) - 1)
         target_x, target_y, target_z = centreline[idx]
 
         # Experiemtn with this or target_x
-        steering_error = math.atan2(target_y, target_x)
+        steering_error = math.atan2(target_x, target_z)  # Compute the steering error based on the target point in the centreline. This is a simple proportional control approach where we compute the angle to the target point and use that as the steering command. We can adjust this to include a more sophisticated control approach if needed, such as a PID controller or a pure pursuit controller.
 
-        cmd = Twist()
-        cmd.linear.x = 0.5  # Set a constant forward speed, this can be adjusted based on the distance to the target or other factors
-        cmd.angular.z = -1.0 * steering_error  # Proportional control for steering based on the error to the target
+        if self.test_track_follower_itself:
+            cmd = Twist()
+            cmd.linear.x = 0.5  # Set a constant forward speed, this can be adjusted based on the distance to the target or other factors
+            cmd.angular.z = -1.0 * steering_error  # Proportional control for steering based on the error to the target
+            
+            self.cmd_vel_pub.publish(cmd)
 
+        else:
+            # Sends behaviour_tree the computed centreline and desired heading to assist in determining the track direction and goal location, and to assist in switching between different navigation strategies based on the distance to the goal. The behaviour tree will then use this information to determine which navigation strategy to use (e.g. follow the gap, goal navigation, etc.) and to compute the appropriate cmd_vel to publish to navigate towards the goal.
+            pass
 
         print(f"The centreline points are: {centreline}")
         print(f"Computed centreline with {len(centreline)} points.")

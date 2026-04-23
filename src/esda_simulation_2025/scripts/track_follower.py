@@ -34,11 +34,26 @@ class TrackFollower(Node):
 
         self.declare_parameter('test_track_follower_itself', True)  # Parameter to control whether to test the track follower node itself or to use the behaviour tree to manage it. This will allow us to test the track follower node in isolation without needing to run the entire behaviour tree, which can be useful for debugging and development purposes.
 
+        # Declaring to disable to enable cmd_vel for testing
+        self.declare_parameter('enable_cmd_vel', True)  # Parameter to control whether to enable publishing cmd_vel from this node. This can be useful for testing and development purposes, allowing us to disable cmd_vel publishing when we want to test the behaviour tree's decision making without actually moving the robot.
+        self.enable_cmd_vel = self.get_parameter('enable_cmd_vel').get_parameter_value().bool_value
+
+        # Declaring gains
+        self.declare_parameter('K_steering', 1.0)  # Gain for the steering control, this can be adjusted based on the desired responsiveness of the steering control. A higher gain will result in more aggressive steering, while a lower gain will result in smoother but less responsive steering.
+        self.declare_parameter('K_speed', 0.5)  # Gain for the speed control, this can be adjusted based on the desired responsiveness of the speed control. A higher gain will result in more aggressive speed changes, while a lower gain will result in smoother but less responsive speed control.
+        self.K_steering = self.get_parameter('K_steering').get_parameter_value().double_value
+        self.K_speed = self.get_parameter('K_speed').get_parameter_value().double_value
+
+
         self.test_track_follower_itself = self.get_parameter('test_track_follower_itself').get_parameter_value().bool_value
 
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10) 
         self.goal_distance_threshold = 0.5  # Distance threshold to switch to goal navigation
         self.current_goal = None  # Placeholder for the current goal position
+
+        
+        self.track_width = 4.0 # Assume a 4 metre track width for computing the centreline from the lane detection data, this can be adjusted based on the actual track width in the simulation or real world environment.
+        self.one_lane_threshold_factor = 1.2  # Threshold for determining if we only see one lane, this can be adjusted based on the expected distance between the lanes and the noise in the lane detection data. If the average x position of the detected lane points is within this threshold from the desired offset, we can consider that we only see one lane and adjust our control strategy accordingly.
 
         self.left_lane = []
         self.right_lane = []
@@ -59,12 +74,12 @@ class TrackFollower(Node):
             10
         )
 
-        self.behaviour_tree_subscriber = self.create_subscription(
-            Twist, 
-            '/cmd_vel', 
-            self.track_follower_callback, 
-            10
-        )
+        # self.behaviour_tree_subscriber = self.create_subscription(
+        #     Twist, 
+        #     '/cmd_vel', 
+        #     self.track_follower_callback, 
+        #     10
+        # )
 
         self.behaviour_tree_publisher = self.create_publisher(
             NavigationRecommendation,
@@ -90,6 +105,28 @@ class TrackFollower(Node):
         if not centreline:
             return
         
+        desired_offset = self.track_width / 2.0  # Desired offset from the centreline to follow, this can be adjusted based on the desired position of the robot on the track (e.g. closer to the left or right lane). For now, we will aim to follow the centreline, so the desired offset is half the track width.
+        print(f"self.left_lane: {self.left_lane}")
+        print(f"self.right_lane: {self.right_lane}")
+        # Check if we only see one of the lanes
+        if len(self.left_lane) > len(self.right_lane) * self.one_lane_threshold_factor:
+            print("Only left lane detected, cannot compute centreline.")
+            avg_x = np.mean([point[0] for point in self.left_lane])
+
+            error = desired_offset - abs(avg_x)  # Compute the error based on the average x position of the detected lane points and the desired offset from the centreline. This is a simple proportional control approach where we compute the error as the difference between the desired offset and the actual offset based on the detected lane points, and we can use this error to compute a steering command to try to maintain the desired offset from the lane. We can adjust this to include a more sophisticated control approach if needed, such as a PID controller or a pure pursuit controller.
+
+            steering = self.K_steering * error  # Compute the steering command based on the error and the steering gain. This will determine how aggressively the robot tries to correct its position based on the detected lane points.
+            print(f"{steering=:.2f}, {error=:.2f}, {avg_x=:.2f}")
+            return
+        elif len(self.right_lane) > len(self.left_lane) * self.one_lane_threshold_factor:
+            print("Only right lane detected, cannot compute centreline.")
+            avg_x = np.mean([point[0] for point in self.right_lane])
+            error = desired_offset - abs(avg_x)  # Compute the error based on the average x position of the detected lane points and the desired offset from the centreline.
+
+            steering = self.K_steering * error  # Compute the steering command based on the error and the steering gain.
+            print(f"{steering=:.2f}, {error=:.2f}, {avg_x=:.2f}")
+            return
+        
         # For debugging purposes, we will print out the computed centreline points and the number of points in the centreline. This will help us verify that we are correctly computing the centreline from the lane detection data. We will also check that we are correctly matching points from the left and right lanes to compute the centreline points, and that we are only considering matches that are within a certain distance along the track to ensure we are matching points that are close enough together.
         idx = min(8, len(centreline) - 1)
         target_x, target_y, target_z = centreline[idx]
@@ -102,6 +139,7 @@ class TrackFollower(Node):
             cmd.linear.x = 0.5  # Set a constant forward speed, this can be adjusted based on the distance to the target or other factors
             cmd.angular.z = -1.0 * steering_error  # Proportional control for steering based on the error to the target
             
+
             self.cmd_vel_pub.publish(cmd)
 
         else:
@@ -138,7 +176,7 @@ class TrackFollower(Node):
         self.left_lane = left_points
         self.right_lane = right_points
 
-        print(len(self.left_lane))
+        print(f"len(self.left_lane): {len(self.left_lane)}")
         print(f"len(self.right_lane): {len(self.right_lane)}")
 
     def compute_centreline(self):

@@ -96,7 +96,7 @@ def wrap_to_pi(angle):
 
 class FollowTheGap(Node):
     def __init__(self):
-        super().__init__('follow_the_gap_cmd_vel')
+        super().__init__('follow_the_gap')
 
         package_share = Path(get_package_share_directory('esda_simulation_2025'))
         robot_description_file = package_share / 'description' / 'robot_core_ref.xacro'
@@ -179,7 +179,7 @@ class FollowTheGap(Node):
 
         self.behaviour_tree_publisher = self.create_publisher(
             NavigationRecommendation,
-            '/follow_the_gap_cmd_vel', 
+            '/follow_the_gap_recommendation', 
             10
         )
 
@@ -537,9 +537,7 @@ class FollowTheGap(Node):
             f'cmd=({linear_x:.2f} m/s, {angular_z:.2f} rad/s)'
         )
     
-    def check_line_of_sign(self):
-        # Check the linear line made up of 
-        pass
+    
 
 
 def main():

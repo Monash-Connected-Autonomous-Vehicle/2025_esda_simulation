@@ -68,7 +68,7 @@ class TrackFollower(Node):
 
         self.behaviour_tree_publisher = self.create_publisher(
             NavigationRecommendation,
-            '/behaviour_tree', 
+            '/track_follower_recommendation', 
             10
         )
 
@@ -219,6 +219,8 @@ class TrackFollower(Node):
         # Implement logic to compute the line equation for the track direction based on lane detection and LiDAR data. This can be used to assist in determining the track direction and to assist in switching between different navigation strategies based on the distance to the goal.
 
         pass
+
+    
 
 
 def main(args=None):

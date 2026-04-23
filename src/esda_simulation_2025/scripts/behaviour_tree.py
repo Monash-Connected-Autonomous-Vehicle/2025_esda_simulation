@@ -52,8 +52,8 @@ class BehaviourTree(Node):
 
         # Subscribes to the track follower node
         self.track_follower_subscription = self.create_subscription(
-            Twist, 
-            '/track_follower', 
+            NavigationRecommendation, 
+            '/track_follower_recommendation', 
             self.track_follower_callback, 
             10
         )
@@ -61,10 +61,11 @@ class BehaviourTree(Node):
         # Subscribes to the follow the gap node
         self.follow_the_gap_subscription = self.create_subscription(
             NavigationRecommendation, 
-            '/follow_the_gap_cmd_vel', 
+            '/follow_the_gap_recommendation', 
             self.follow_the_gap_callback, 
             10
         )
+
 
         # Start the robot in the centreline following state by default. We will switch to other states based on the sensor data and the distance to the goal.
         self.current_state = NavigationState.CENTRELINE_FOLLOWING

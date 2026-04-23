@@ -4,6 +4,7 @@ Lane Detection Node for ESDA Simulation
 Detects white lane markings from camera feed and publishes them as obstacles to SLAM map
 """
 
+# from build.esda_simulation_2025.rosidl_generator_py.esda_simulation_2025.msg._navigation_recommendation import NavigationRecommendation
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
@@ -95,6 +96,12 @@ class LaneDetectionNode(Node):
             '/lane_obstacles',
             10
         )
+
+        # self.behaviour_tree_publisher = self.create_publisher(
+        #     NavigationRecommendation,
+        #     '/behaviour_tree', 
+        #     10
+        # )
 
         # TF Buffer for transforming points
         self.tf_buffer = Buffer()

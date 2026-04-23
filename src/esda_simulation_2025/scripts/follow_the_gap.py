@@ -29,6 +29,9 @@ import subprocess
 
 import matplotlib.pyplot as plt
 
+# from build.esda_simulation_2025.rosidl_generator_py.esda_simulation_2025.msg._navigation_recommendation import NavigationRecommendation
+from esda_simulation_2025.msg import NavigationRecommendation
+
 
 # Define the FollowTheGap class, which will implement the "Follow the Gap" algorithm for navigation
 # This algorithm does not seek out the longest gap, but rather the gap that is closest to the goal direction, which can be more efficient in certain scenarios.
@@ -171,6 +174,12 @@ class FollowTheGap(Node):
             MarkerArray, 
             '/lane_markers', 
             self.lane_listener_callback, 
+            10
+        )
+
+        self.behaviour_tree_publisher = self.create_publisher(
+            NavigationRecommendation,
+            '/follow_the_gap_cmd_vel', 
             10
         )
 
@@ -472,6 +481,17 @@ class FollowTheGap(Node):
         if best_gap is None:
             self.get_logger().warn('No safe gap found')
             self.stop_robot()
+
+            # Send message to the behaviour tree node to indicate that the path is blocked and that the robot is stopping to re-evaluate the environment. This can be used to trigger a switch to a different navigation strategy or to trigger a recovery behavior if the robot is stuck.
+            follow_the_gap_msg_recommendation = NavigationRecommendation()
+            follow_the_gap_msg_recommendation.source = 'follow_the_gap'
+            follow_the_gap_msg_recommendation.valid = False  # Path is blocked, not safe to proceed
+            follow_the_gap_msg_recommendation.confidence = 0.0  # No confidence in proceeding forward
+            follow_the_gap_msg_recommendation.linear_x = 0.0
+            follow_the_gap_msg_recommendation.angular_z = 0.0
+
+            self.behaviour_tree_publisher.publish(follow_the_gap_msg_recommendation)
+
             return
 
         gap_center_angle, gap_indices, gap_depth = best_gap
@@ -516,6 +536,10 @@ class FollowTheGap(Node):
             f'gap_depth={gap_depth:.2f} m, '
             f'cmd=({linear_x:.2f} m/s, {angular_z:.2f} rad/s)'
         )
+    
+    def check_line_of_sign(self):
+        # Check the linear line made up of 
+        pass
 
 
 def main():

@@ -29,6 +29,9 @@ from rclpy.node import Node
 
 from enum import Enum
 
+# from build.esda_simulation_2025.rosidl_generator_py.esda_simulation_2025.msg._navigation_recommendation import NavigationRecommendation
+from esda_simulation_2025.msg import NavigationRecommendation
+
 # Define an enumeration for the different navigation states of the robot. This will help us manage the different navigation strategies in a clear and organized way, allowing us to easily switch between them based on the current state of the robot and the environment.
 class NavigationState(Enum):
     CENTRELINE_FOLLOWING = 1
@@ -50,13 +53,19 @@ class BehaviourTree(Node):
         # Subscribes to the track follower node
         self.track_follower_subscription = self.create_subscription(
             Twist, 
-            '/cmd_vel', 
+            '/track_follower', 
             self.track_follower_callback, 
             10
         )
 
+        # Subscribes to the follow the gap node
+        self.follow_the_gap_subscription = self.create_subscription(
+            NavigationRecommendation, 
+            '/follow_the_gap_cmd_vel', 
+            self.follow_the_gap_callback, 
+            10
+        )
 
-        
         # Start the robot in the centreline following state by default. We will switch to other states based on the sensor data and the distance to the goal.
         self.current_state = NavigationState.CENTRELINE_FOLLOWING
 
@@ -82,3 +91,25 @@ class BehaviourTree(Node):
         elif self.current_state == NavigationState.RECOVERY:
             # Implement logic for recovery strategy to handle situations where the robot is stuck or encounters an unexpected situation
             pass
+
+    def track_follower_callback(self, msg):
+        # This callback will be called whenever a new message is received from the track follower node. We will use this information to update our current state and make decisions about which navigation strategy to use.
+        self.get_logger().info(
+            f'Received Track Follower cmd_vel: linear_x={msg.linear.x:.2f} m/s, angular_z={msg.angular.z:.2f} rad/s'
+        )
+
+    def follow_the_gap_callback(self, msg):
+        # This callback will be called whenever a new message is received from the follow the gap node. We will use this information to update our current state and make decisions about which navigation strategy to use.
+        self.get_logger().info(
+            f'Received Follow the Gap recommendation: valid={msg.valid}, confidence={msg.confidence:.2f}, linear_x={msg.linear_x:.2f}, angular_z={msg.angular_z:.2f}'
+        )
+
+def main():
+    rclpy.init()
+    behaviour_tree_node = BehaviourTree()
+    rclpy.spin(behaviour_tree_node)
+    behaviour_tree_node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

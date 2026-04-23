@@ -11,6 +11,10 @@ import rclpy
 
 from rclpy.node import Node
 
+# from build.esda_simulation_2025.rosidl_generator_py.esda_simulation_2025.msg._navigation_recommendation import NavigationRecommendation
+from esda_simulation_2025.msg import NavigationRecommendation
+
+
 # This node is the main node that will handle the overall track following around the entire map. It will subscribe to the laser scan data and implement the follow the gap algorithm to navigate around the track. It will also handle switching to a different navigation strategy when the robot is within a certain distance to the goal.
 # The pipeline will be as follows:
 # 1. Get the track direction --> Uses lane detection, obstacle detection and corridors from LiDAR data to determine the direction of the track and the location of the goal.
@@ -59,6 +63,12 @@ class TrackFollower(Node):
             Twist, 
             '/cmd_vel', 
             self.track_follower_callback, 
+            10
+        )
+
+        self.behaviour_tree_publisher = self.create_publisher(
+            NavigationRecommendation,
+            '/behaviour_tree', 
             10
         )
 
@@ -203,6 +213,11 @@ class TrackFollower(Node):
 
     def navigate_to_goal(self):
         # Implement navigation logic to move towards the current goal
+        pass
+
+    def get_line_equation(self):
+        # Implement logic to compute the line equation for the track direction based on lane detection and LiDAR data. This can be used to assist in determining the track direction and to assist in switching between different navigation strategies based on the distance to the goal.
+
         pass
 
 

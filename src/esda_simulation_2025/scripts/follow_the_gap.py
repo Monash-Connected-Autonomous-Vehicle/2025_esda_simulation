@@ -116,6 +116,9 @@ class FollowTheGap(Node):
         self.declare_parameter('max_turn_rate', 1.5)
         self.declare_parameter('steering_gain', 0.8)
         self.declare_parameter('forward_bias_gain', 0.35)
+        self.declare_parameter('recommendation_config', True) # Whether to publish recommendations to the behaviour tree node, can be set to False for testing the FTG algorithm in isolation without affecting the overall behaviour tree logic. This allows for more focused testing and debugging of the FTG algorithm itself or straight /cmd_vel commands, without needing to consider the interactions with the behaviour tree node
+
+        self.recommendation_config = self.get_parameter('recommendation_config').get_parameter_value().bool_value
 
         self.lidar_topic = self.get_parameter('lidar_topic').get_parameter_value().string_value
         self.map_topic = self.get_parameter('map_topic').get_parameter_value().string_value
@@ -529,7 +532,17 @@ class FollowTheGap(Node):
         if gap_distance >= self.safe_distance:
             linear_x = max(self.min_speed, linear_x)
 
-        self.publish_cmd(linear_x, angular_z)
+        # If self.recommendation_config is False, publish the recommended cmd_vel to the behaviour tree node, otherwise just execute the cmd_vel without publishing to the behaviour tree node. This allows for testing the FTG algorithm in isolation without affecting the overall behaviour tree logic.
+        if self.recommendation_config:
+            follow_the_gap_msg_recommendation = NavigationRecommendation()
+            follow_the_gap_msg_recommendation.source = 'follow_the_gap'
+            follow_the_gap_msg_recommendation.valid = True
+            follow_the_gap_msg_recommendation.confidence = 1.0
+            follow_the_gap_msg_recommendation.linear_x = linear_x
+            follow_the_gap_msg_recommendation.angular_z = angular_z
+            self.behaviour_tree_publisher.publish(follow_the_gap_msg_recommendation)
+        else:
+            self.publish_cmd(linear_x, angular_z)
 
         self.get_logger().info(
             f'gap_angle={math.degrees(gap_center_angle):.1f} deg, '
@@ -537,9 +550,6 @@ class FollowTheGap(Node):
             f'cmd=({linear_x:.2f} m/s, {angular_z:.2f} rad/s)'
         )
     
-    
-
-
 def main():
     rclpy.init()
     node = FollowTheGap()

@@ -18,6 +18,7 @@
 # FTG for close objects
 # track_follower for when lanes are detected and no close obstacles for general palnner
 
+from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from visualization_msgs.msg import MarkerArray
@@ -45,6 +46,8 @@ class BehaviourTree(Node):
         super().__init__('behaviour_tree')
 
         # Subscribing to different topics
+        self.cmd_vel_publisher = self.create_publisher(Twist, '/cmd_vel', 10)
+
         self.declare_parameter('lidar_topic', '/scan')
         self.declare_parameter('map_topic', '/map')
         self.declare_parameter('robot_frame', 'base_link')
@@ -66,41 +69,109 @@ class BehaviourTree(Node):
             10
         )
 
+        # Subscribes to Odometry to get the current position of the robot and calculate the distance to the goal, which will help us determine when to switch to the goal navigation strategy as we get closer to the goal.
+        self.odom_subscriber = self.create_subscription(
+            Odometry,
+            '/odom',
+            self.odom_callback,
+            10
+        )
 
-        # Start the robot in the centreline following state by default. We will switch to other states based on the sensor data and the distance to the goal.
-        self.current_state = NavigationState.CENTRELINE_FOLLOWING
+        # Latest NavigationRecommendation messages from the track follower and follow the gap nodes, which we will use in our control loop to make decisions about which navigation strategy to use based on the current state of the robot and the environment.
+        self.latest_track_recommendation_msg = None
+        self.latest_follow_the_gap_recommendation_msg = None
 
+        # Latest NavigationRecommendation timestamps to track the freshness of the data and ensure we are making decisions based on the most recent information available from the track follower and follow the gap nodes.
+        self.latest_track_recommendation_timestamp = None
+        self.latest_follow_the_gap_recommendation_timestamp = None
+
+        # Start the robot in the follow the gap state by default. We will switch to other states based on the sensor data and the distance to the goal.
+        self.current_state = NavigationState.FOLLOW_THE_GAP
+
+        # Declare an angle that the recovery spin should rotate to, this will be used in the recovery strategy to help the robot get unstuck or handle unexpected situations by rotating in place to try to find a clear path forward.
+        self.declare_parameter('recovery_spin_angle', math.radians(35.0))  # Rotate 35 degrees in the recovery strategy to try to get unstuck or find a clear path forward
+        self.recovery_spin_angle = self.get_parameter('recovery_spin_angle').get_parameter_value().double_value
 
         # Defining the timer control loop period
         timer_period = 0.2  # seconds
         self.timer = self.create_timer(timer_period, self.control_loop)
 
-    
+        self.max_age_time = 0.5  # seconds, the maximum age of the NavigationRecommendation messages that we will consider valid for making decisions in our control loop. If the messages are older than this threshold, we will consider them stale and may choose to switch to a different navigation strategy or enter a recovery state to handle the situation appropriately.
+
+    def odom_callback(self, msg):
+        # This callback will be called whenever a new Odometry message is received. We will use this information to calculate the distance to the goal and determine when to switch to the goal navigation strategy as we get closer to the goal.
+        pass
+
+    def publish_cmd_vel(self, linear_x, angular_z):
+        # This function will be used to publish cmd_vel messages to control the robot's movement. We will call this function from our control loop based on the current navigation strategy and the recommendations received from the track follower and follow the gap nodes.
+        cmd_vel_msg = Twist()
+        cmd_vel_msg.linear.x = linear_x
+        cmd_vel_msg.angular.z = angular_z
+        self.cmd_vel_publisher.publish(cmd_vel_msg)
+        self.get_logger().info(
+            f'Published cmd_vel: linear_x={linear_x:.2f} m/s, angular_z={angular_z:.2f} rad/s'
+        )
+
     
     def control_loop(self):
         # This is the main control loop that will be called periodically by the timer. In this loop, we will check the current state of the robot and the environment based on the latest sensor data, and we will switch between different navigation strategies accordingly. We will also implement a recovery strategy for handling situations where the robot is stuck or encounters an unexpected situation.
+        
         if self.current_state == NavigationState.CENTRELINE_FOLLOWING:
             # Implement logic for centreline following navigation strategy
 
             pass
         elif self.current_state == NavigationState.FOLLOW_THE_GAP:
             # Implement logic for follow the gap navigation strategy
-            pass
+            if self.latest_follow_the_gap_recommendation_msg is not None:
+                
+                if not self.latest_follow_the_gap_recommendation_msg.valid:
+                    self.current_state = NavigationState.RECOVERY
+                    return
+
+                # Check the age of the follow the gap recommendation message to ensure it is still valid for making decisions in our control loop. If the message is too old, we may choose to switch to a different navigation strategy or enter a recovery state to handle the situation appropriately.
+                current_time = self.get_clock().now()
+                follow_the_gap_msg_age = (current_time - self.latest_follow_the_gap_recommendation_timestamp).nanoseconds / 1e9  # Convert to seconds
+
+                if follow_the_gap_msg_age < self.max_age_time:
+                    # The follow the gap recommendation message is still valid, so we can use it to control the robot's movement based on the recommended linear and angular velocities.
+                    self.publish_cmd_vel(
+                        self.latest_follow_the_gap_recommendation_msg.linear_x,
+                        self.latest_follow_the_gap_recommendation_msg.angular_z
+                    )
+                else:
+                    # The follow the gap recommendation message is too old, so we may choose to switch to a different navigation strategy or enter a recovery state to handle the situation appropriately. For example, we could switch back to centreline following or enter a recovery state if we are currently in follow the gap mode and the recommendations are no longer valid.
+                    self.get_logger().warn('Follow the Gap recommendation message is too old, switching to recovery state')
+                    self.current_state = NavigationState.RECOVERY
+
+            
         elif self.current_state == NavigationState.GOAL_NAVIGATION:
             # Implement logic for goal navigation strategy
             pass
         elif self.current_state == NavigationState.RECOVERY:
+            self.get_logger().info('In recovery state, attempting to get unstuck or handle unexpected situation')
             # Implement logic for recovery strategy to handle situations where the robot is stuck or encounters an unexpected situation
+
+            # Rotate in place slowly to try to get unstuck or find a clear path forward. We can use the recovery_spin_angle parameter to determine how much to rotate in place in the recovery strategy. This is a simple recovery strategy that can help the robot get unstuck or find a clear path forward
+
+            self.publish_cmd_vel(0.0, 0.2)
+
+            
             pass
 
     def track_follower_callback(self, msg):
         # This callback will be called whenever a new message is received from the track follower node. We will use this information to update our current state and make decisions about which navigation strategy to use.
+        self.latest_track_recommendation_msg = msg
+        self.latest_track_recommendation_timestamp = self.get_clock().now()
+
         self.get_logger().info(
             f'Received Track Follower cmd_vel: linear_x={msg.linear.x:.2f} m/s, angular_z={msg.angular.z:.2f} rad/s'
         )
 
     def follow_the_gap_callback(self, msg):
         # This callback will be called whenever a new message is received from the follow the gap node. We will use this information to update our current state and make decisions about which navigation strategy to use.
+        self.latest_follow_the_gap_recommendation_msg = msg
+        self.latest_follow_the_gap_recommendation_timestamp = self.get_clock().now()
+        
         self.get_logger().info(
             f'Received Follow the Gap recommendation: valid={msg.valid}, confidence={msg.confidence:.2f}, linear_x={msg.linear_x:.2f}, angular_z={msg.angular_z:.2f}'
         )

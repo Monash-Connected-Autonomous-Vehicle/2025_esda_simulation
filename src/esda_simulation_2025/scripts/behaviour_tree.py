@@ -30,6 +30,8 @@ from rclpy.node import Node
 
 from enum import Enum
 
+import tf_transformations
+
 # from build.esda_simulation_2025.rosidl_generator_py.esda_simulation_2025.msg._navigation_recommendation import NavigationRecommendation
 from esda_simulation_2025.msg import NavigationRecommendation
 
@@ -72,7 +74,7 @@ class BehaviourTree(Node):
         # Subscribes to Odometry to get the current position of the robot and calculate the distance to the goal, which will help us determine when to switch to the goal navigation strategy as we get closer to the goal.
         self.odom_subscriber = self.create_subscription(
             Odometry,
-            '/odom',
+            '/diff_drive_base_controller/odom',
             self.odom_callback,
             10
         )
@@ -98,9 +100,21 @@ class BehaviourTree(Node):
 
         self.max_age_time = 0.5  # seconds, the maximum age of the NavigationRecommendation messages that we will consider valid for making decisions in our control loop. If the messages are older than this threshold, we will consider them stale and may choose to switch to a different navigation strategy or enter a recovery state to handle the situation appropriately.
 
+        self.initial_yaw = 0.0
+        self.current_yaw = 0.0
+        self.odom_received = False
+
     def odom_callback(self, msg):
         # This callback will be called whenever a new Odometry message is received. We will use this information to calculate the distance to the goal and determine when to switch to the goal navigation strategy as we get closer to the goal.
-        pass
+        orientation = msg.pose.pose.orientation
+
+        _, _, self.current_yaw = tf_transformations.euler_from_quaternion([orientation.x, orientation.y, orientation.z, orientation.w])
+
+        self.get_logger().info(
+            f'Received Odometry: current_yaw={math.degrees(self.current_yaw):.2f} degrees'
+        )
+
+        self.odom_received = True
 
     def publish_cmd_vel(self, linear_x, angular_z):
         # This function will be used to publish cmd_vel messages to control the robot's movement. We will call this function from our control loop based on the current navigation strategy and the recommendations received from the track follower and follow the gap nodes.
@@ -123,6 +137,12 @@ class BehaviourTree(Node):
         elif self.current_state == NavigationState.FOLLOW_THE_GAP:
             # Implement logic for follow the gap navigation strategy
             if self.latest_follow_the_gap_recommendation_msg is not None:
+                
+                # If the track follower recommendation indicates that the path ahead is clear, we can switch back to centreline following state to continue following the lanes on the track. This allows us to seamlessly transition between the follow the gap strategy 
+                # if self.latest_track_recommendation_msg is not None and self.latest_track_recommendation_msg.reason == 'path_ahead_clear':
+                #     self.get_logger().info('Track Follower recommendation indicates path ahead is clear, switching back to centreline following state ===================================================================================================================================================================')
+                    
+                #     return
                 
                 if not self.latest_follow_the_gap_recommendation_msg.valid:
                     self.current_state = NavigationState.RECOVERY
@@ -155,6 +175,17 @@ class BehaviourTree(Node):
 
             self.publish_cmd_vel(0.0, 0.2)
 
+            if self.latest_follow_the_gap_recommendation_msg is not None and self.latest_follow_the_gap_recommendation_msg.valid:
+                # If the follow the gap recommendation becomes valid again, we can switch back to the follow the gap navigation strategy to continue navigating based on the recommendations from the follow the gap node.
+                self.get_logger().info('Follow the Gap recommendation is valid again, switching back to Follow the Gap state ===================================================================================================================================================================')
+                self.current_state = NavigationState.FOLLOW_THE_GAP
+                return
+
+            # If sees a valid track follow then go towards it
+            if self.latest_track_recommendation_msg is not None and self.latest_track_recommendation_msg.valid:
+                # Go back to Follow the Gap algorithm
+                self.get_logger().info('Track Follower recommendation is valid again, switching back to Follow the Gap state ===================================================================================================================================================================')
+                pass
             
             pass
 

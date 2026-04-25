@@ -32,7 +32,7 @@ class TrackFollower(Node):
         self.declare_parameter('robot_frame', 'base_link')
         self.declare_parameter('frame_id', 'map')
 
-        self.declare_parameter('test_track_follower_itself', True)  # Parameter to control whether to test the track follower node itself or to use the behaviour tree to manage it. This will allow us to test the track follower node in isolation without needing to run the entire behaviour tree, which can be useful for debugging and development purposes.
+        self.declare_parameter('test_track_follower_itself', False)  # Parameter to control whether to test the track follower node itself or to use the behaviour tree to manage it. This will allow us to test the track follower node in isolation without needing to run the entire behaviour tree, which can be useful for debugging and development purposes.
 
         # Declaring to disable to enable cmd_vel for testing
         self.declare_parameter('enable_cmd_vel', True)  # Parameter to control whether to enable publishing cmd_vel from this node. This can be useful for testing and development purposes, allowing us to disable cmd_vel publishing when we want to test the behaviour tree's decision making without actually moving the robot.
@@ -108,31 +108,59 @@ class TrackFollower(Node):
         desired_offset = self.track_width / 2.0  # Desired offset from the centreline to follow, this can be adjusted based on the desired position of the robot on the track (e.g. closer to the left or right lane). For now, we will aim to follow the centreline, so the desired offset is half the track width.
         print(f"self.left_lane: {self.left_lane}")
         print(f"self.right_lane: {self.right_lane}")
+
         # Check if we only see one of the lanes
-        if len(self.left_lane) > len(self.right_lane) * self.one_lane_threshold_factor:
-            print("Only left lane detected, cannot compute centreline.")
-            avg_x = np.mean([point[0] for point in self.left_lane])
+        # if len(self.left_lane) > len(self.right_lane) * self.one_lane_threshold_factor:
+        #     print("Only left lane detected, cannot compute centreline.")
+        #     avg_x = np.mean([point[0] for point in self.left_lane])
 
-            error = desired_offset - abs(avg_x)  # Compute the error based on the average x position of the detected lane points and the desired offset from the centreline. This is a simple proportional control approach where we compute the error as the difference between the desired offset and the actual offset based on the detected lane points, and we can use this error to compute a steering command to try to maintain the desired offset from the lane. We can adjust this to include a more sophisticated control approach if needed, such as a PID controller or a pure pursuit controller.
+        #     error = desired_offset - abs(avg_x)  # Compute the error based on the average x position of the detected lane points and the desired offset from the centreline. This is a simple proportional control approach where we compute the error as the difference between the desired offset and the actual offset based on the detected lane points, and we can use this error to compute a steering command to try to maintain the desired offset from the lane. We can adjust this to include a more sophisticated control approach if needed, such as a PID controller or a pure pursuit controller.
 
-            steering = self.K_steering * error  # Compute the steering command based on the error and the steering gain. This will determine how aggressively the robot tries to correct its position based on the detected lane points.
-            print(f"{steering=:.2f}, {error=:.2f}, {avg_x=:.2f}")
-            return
-        elif len(self.right_lane) > len(self.left_lane) * self.one_lane_threshold_factor:
-            print("Only right lane detected, cannot compute centreline.")
-            avg_x = np.mean([point[0] for point in self.right_lane])
-            error = desired_offset - abs(avg_x)  # Compute the error based on the average x position of the detected lane points and the desired offset from the centreline.
+        #     steering = self.K_steering * error  # Compute the steering command based on the error and the steering gain. This will determine how aggressively the robot tries to correct its position based on the detected lane points.
+        #     print(f"{steering=:.2f}, {error=:.2f}, {avg_x=:.2f}")
+        #     return
+        # elif len(self.right_lane) > len(self.left_lane) * self.one_lane_threshold_factor:
+        #     print("Only right lane detected, cannot compute centreline.")
+        #     avg_x = np.mean([point[0] for point in self.right_lane])
+        #     error = desired_offset - abs(avg_x)  # Compute the error based on the average x position of the detected lane points and the desired offset from the centreline.
 
-            steering = self.K_steering * error  # Compute the steering command based on the error and the steering gain.
-            print(f"{steering=:.2f}, {error=:.2f}, {avg_x=:.2f}")
-            return
+        #     steering = self.K_steering * error  # Compute the steering command based on the error and the steering gain.
+        #     print(f"{steering=:.2f}, {error=:.2f}, {avg_x=:.2f}")
+        #     return
         
-        # For debugging purposes, we will print out the computed centreline points and the number of points in the centreline. This will help us verify that we are correctly computing the centreline from the lane detection data. We will also check that we are correctly matching points from the left and right lanes to compute the centreline points, and that we are only considering matches that are within a certain distance along the track to ensure we are matching points that are close enough together.
-        idx = min(8, len(centreline) - 1)
-        target_x, target_y, target_z = centreline[idx]
+        # Need enough centreline points
+        if len(centreline) < 2:
+            return
 
-        # Experiemtn with this or target_x
-        steering_error = math.atan2(target_x, target_z)  # Compute the steering error based on the target point in the centreline. This is a simple proportional control approach where we compute the angle to the target point and use that as the steering command. We can adjust this to include a more sophisticated control approach if needed, such as a PID controller or a pure pursuit controller.
+        # Smooth direction tracking
+        start_idx = min(5, len(centreline) - 2)
+        end_idx = min(10, len(centreline) - 1)
+
+        dx_total = 0.0
+        dz_total = 0.0
+        count = 0
+
+        for i in range(start_idx, end_idx):
+            x1, y1, z1 = centreline[i]
+            x2, y2, z2 = centreline[i + 1]
+
+            dx_total += (x2 - x1)
+            dz_total += (z2 - z1)
+            count += 1
+
+        if count == 0:
+            return
+
+        desired_heading = math.atan2(dx_total, dz_total)
+
+        # Small correction toward centreline position
+        target_idx = min(8, len(centreline) - 1)
+        target_x, _, target_z = centreline[target_idx]
+
+        position_error = math.atan2(target_x, target_z)
+
+        # Blend both
+        steering_error = desired_heading + 0.5 * position_error
 
         if self.test_track_follower_itself:
             cmd = Twist()
@@ -144,7 +172,14 @@ class TrackFollower(Node):
 
         else:
             # Sends behaviour_tree the computed centreline and desired heading to assist in determining the track direction and goal location, and to assist in switching between different navigation strategies based on the distance to the goal. The behaviour tree will then use this information to determine which navigation strategy to use (e.g. follow the gap, goal navigation, etc.) and to compute the appropriate cmd_vel to publish to navigate towards the goal.
-            pass
+            
+            navigation_recommendation = NavigationRecommendation()
+            navigation_recommendation.source = 'track_follower'
+            navigation_recommendation.valid = True
+            navigation_recommendation.reason = 'centreline_computed'
+            navigation_recommendation.linear_x = 0.5  # This can be adjusted based on the distance to the target or other factors
+            navigation_recommendation.angular_z = -1.0 * steering_error  # Proportional control for steering based on the error to the target
+            self.behaviour_tree_publisher.publish(navigation_recommendation)
 
         print(f"The centreline points are: {centreline}")
         print(f"Computed centreline with {len(centreline)} points.")

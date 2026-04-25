@@ -142,7 +142,8 @@ class BehaviourTree(Node):
                 if self.latest_follow_the_gap_recommendation_msg.reason == 'path_ahead_clear':
                     self.get_logger().info('Follow The Gap recommendation indicates path ahead is clear, switching back to centreline following state ===================================================================================================================================================================')
                     
-                    # self.current_state = NavigationState.CENTRELINE_FOLLOWING
+                    # Changes to lane following state
+                    self.current_state = NavigationState.CENTRELINE_FOLLOWING
                 
                 if not self.latest_follow_the_gap_recommendation_msg.valid:
                     self.current_state = NavigationState.RECOVERY
@@ -195,7 +196,7 @@ class BehaviourTree(Node):
         self.latest_track_recommendation_timestamp = self.get_clock().now()
 
         self.get_logger().info(
-            f'Received Track Follower cmd_vel: linear_x={msg.linear.x:.2f} m/s, angular_z={msg.angular.z:.2f} rad/s'
+            f'Received Track Follower cmd_vel: linear_x={msg.linear_x:.2f} m/s, angular_z={msg.angular_z:.2f} rad/s'
         )
 
     def follow_the_gap_callback(self, msg):

@@ -132,7 +132,7 @@ class BehaviourTree(Node):
         
         if self.current_state == NavigationState.CENTRELINE_FOLLOWING:
             # Implement logic for centreline following navigation strategy
-
+            # self.latest_track_recommendation_msg
             pass
         elif self.current_state == NavigationState.FOLLOW_THE_GAP:
             # Implement logic for follow the gap navigation strategy
@@ -144,6 +144,7 @@ class BehaviourTree(Node):
                     
                     # Changes to lane following state
                     self.current_state = NavigationState.CENTRELINE_FOLLOWING
+                    return
                 
                 if not self.latest_follow_the_gap_recommendation_msg.valid:
                     self.current_state = NavigationState.RECOVERY

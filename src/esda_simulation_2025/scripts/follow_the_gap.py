@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from enum import Enum
 import math
 import numpy as np
 
@@ -52,6 +53,11 @@ from esda_simulation_2025.msg import NavigationRecommendation
 # Wigglling problem - Robot keeps turning left and right --> 'S' shape --> Set limit threshold e,g, 2m or 3m, then follow centre of deepest gap until the robot is within the threshold distance to the goal, then switch to a different navigation strategy (e.g., A* or Dijkstra's) to navigate the remaining distance to the goal.
 
 # NOTE: This code is to be used in conjunction with track_follower.py. which will handle the overall track following around the entire map
+
+class States(Enum):
+    NO_SAFE_GAPS = 0
+    GAP_FOLLOWING = 1
+    PATH_AHEAD_CLEAR = 2
 
 def load_robot_xml(filepath):
     result = subprocess.run(
@@ -187,6 +193,10 @@ class FollowTheGap(Node):
         )
 
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+
+        # State variables for debugging and potential future use in the behaviour tree node
+        self.previous_state = None
+        self.current_state = None
 
         self.get_logger().info('FollowTheGap cmd_vel node initialised')
         self.get_logger().info(f'Robot width: {self.robot_x_width:.3f} m')
@@ -422,7 +432,10 @@ class FollowTheGap(Node):
         if front_ranges.size == 0:
             return False  # safer than True
 
-        return np.all(front_ranges > clear_distance)
+        clear_ratio = np.mean(front_ranges > clear_distance)
+        min_front = float(np.min(front_ranges))
+
+        return clear_ratio > 0.80 and min_front > 0.6
 
     def scan_callback(self, msg):
         try:
@@ -522,6 +535,7 @@ class FollowTheGap(Node):
 
             self.behaviour_tree_publisher.publish(follow_the_gap_msg_recommendation)
 
+            self.current_state = States.NO_SAFE_GAPS  # Update state to indicate no safe gaps found
             return
 
         gap_center_angle, gap_indices, gap_depth = best_gap
@@ -559,7 +573,12 @@ class FollowTheGap(Node):
         if gap_distance >= self.safe_distance:
             linear_x = max(self.min_speed, linear_x)
 
-        # If self.recommendation_config is False, publish the recommended cmd_vel to the behaviour tree node, otherwise just execute the cmd_vel without publishing to the behaviour tree node. This allows for testing the FTG algorithm in isolation without affecting the overall behaviour tree logic.
+        # If the previous state was NO_SAFE_GAPS and we have now found a safe gap and are in GAP_FOLLOWING and there are no obstacles very close ahead, then tell the behaviour tree node to use the track follower node again as the path ahead is now clear and safe to follow, otherwise if there are obstacles close ahead, then we can still follow the gap but we shouldn't switch back to track follower yet as the path isn't fully clear
+        if self.previous_state == States.NO_SAFE_GAPS and self.current_state == States.GAP_FOLLOWING and self.path_ahead_is_clear(forward_ranges, forward_angles):
+            self.get_logger().info('Transition: NO_SAFE_GAPS -> GAP_FOLLOWING - Found a safe gap, resuming movement')
+            
+
+        # If self.recommendation_config is True, publish the recommended cmd_vel to the behaviour tree node, otherwise just execute the cmd_vel without publishing to the behaviour tree node. This allows for testing the FTG algorithm in isolation without affecting the overall behaviour tree logic.
         if self.recommendation_config:
             self.get_logger().info('Publishing Follow the Gap recommendation to behaviour tree node\n===================================================================================================================================================================')
             follow_the_gap_msg_recommendation = NavigationRecommendation()
@@ -569,6 +588,9 @@ class FollowTheGap(Node):
             follow_the_gap_msg_recommendation.linear_x = linear_x
             follow_the_gap_msg_recommendation.angular_z = angular_z
             self.behaviour_tree_publisher.publish(follow_the_gap_msg_recommendation)
+
+            # Saving the current state
+            self.current_state = States.GAP_FOLLOWING
         else:
             self.publish_cmd(linear_x, angular_z)
 
@@ -577,6 +599,9 @@ class FollowTheGap(Node):
             f'gap_depth={gap_depth:.2f} m, '
             f'cmd=({linear_x:.2f} m/s, {angular_z:.2f} rad/s)'
         )
+
+        # Saving the previous state as the current state
+        self.previous_state = self.current_state
     
 def main():
     rclpy.init()

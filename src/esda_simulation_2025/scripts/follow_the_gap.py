@@ -518,6 +518,7 @@ class FollowTheGap(Node):
             follow_the_gap_msg_recommendation.confidence = 0.0  # No confidence in proceeding forward
             follow_the_gap_msg_recommendation.linear_x = 0.0
             follow_the_gap_msg_recommendation.angular_z = 0.0
+            follow_the_gap_msg_recommendation.reason = 'path_blocked'  # Custom field to indicate reason for stopping, can be used by the behaviour tree node to make informed decisions
 
             self.behaviour_tree_publisher.publish(follow_the_gap_msg_recommendation)
 

@@ -138,11 +138,11 @@ class BehaviourTree(Node):
             # Implement logic for follow the gap navigation strategy
             if self.latest_follow_the_gap_recommendation_msg is not None:
                 
-                # If the track follower recommendation indicates that the path ahead is clear, we can switch back to centreline following state to continue following the lanes on the track. This allows us to seamlessly transition between the follow the gap strategy 
-                # if self.latest_track_recommendation_msg is not None and self.latest_track_recommendation_msg.reason == 'path_ahead_clear':
-                #     self.get_logger().info('Track Follower recommendation indicates path ahead is clear, switching back to centreline following state ===================================================================================================================================================================')
+                # If the follow the gap recommendation indicates that the path ahead is clear, we can switch back to centreline following state to continue following the lanes on the track. This allows us to seamlessly transition between the follow the gap strategy 
+                if self.latest_follow_the_gap_recommendation_msg.reason == 'path_ahead_clear':
+                    self.get_logger().info('Follow The Gap recommendation indicates path ahead is clear, switching back to centreline following state ===================================================================================================================================================================')
                     
-                #     return
+                    # self.current_state = NavigationState.CENTRELINE_FOLLOWING
                 
                 if not self.latest_follow_the_gap_recommendation_msg.valid:
                     self.current_state = NavigationState.RECOVERY

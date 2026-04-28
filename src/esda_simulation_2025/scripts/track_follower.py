@@ -55,6 +55,8 @@ class TrackFollower(Node):
         self.track_width = 4.0 # Assume a 4 metre track width for computing the centreline from the lane detection data, this can be adjusted based on the actual track width in the simulation or real world environment.
         self.one_lane_threshold_factor = 1.2  # Threshold for determining if we only see one lane, this can be adjusted based on the expected distance between the lanes and the noise in the lane detection data. If the average x position of the detected lane points is within this threshold from the desired offset, we can consider that we only see one lane and adjust our control strategy accordingly.
 
+        self.temp_lane_timer_cb_test = True  # Temporary variable to control whether to run the lane_timer_callback for testing purposes, this can be removed once we have the lane_timer_callback fully implemented and tested.
+
         self.left_lane = []
         self.right_lane = []
 
@@ -92,98 +94,166 @@ class TrackFollower(Node):
 
         print("Track Follower node initialized and subscribed to LiDAR and lane detection topics.")
 
+    def get_line_lane_equation(self, lane_points):
+        # Implement logic to compute the line equation for a lane based on the detected lane points. This can be used to assist in determining the track direction and to assist in switching between different navigation strategies based on the distance to the goal.
+        # Getting the line equation for the left and right lanes can help us determine the track direction and can also assist in switching between different navigation strategies based on the distance to the goal. For example, if we are far from the goal, we may want to follow the lane more closely, while if we are close to the goal, we may want to switch to a different navigation strategy that focuses more on navigating towards the goal rather than following the lane.
+        if lane_points is None or len(lane_points) < 2:
+            return None  # Not enough points to compute a line equation
+        
+        # Extract x and z coordinates from the lane points
+        z_values = np.array([point[2] for point in lane_points], dtype=float)
+        x_values = np.array([point[0] for point in lane_points], dtype=float)
+
+        # Fit a line of the form x = m*z + c to the lane points using numpy's polyfit function, treating z as the independent variable and x as the dependent variable. This will give us the slope (m) and intercept (c) of the line equation, which we can use to determine the track direction and to assist in switching between different navigation strategies based on the distance to the goal.
+        m, c = np.polyfit(z_values, x_values, 1)  # Fit a line to the lane points, treating z as the independent variable and x as the dependent variable. This will give us the slope (m) and intercept (c) of the line equation in the form x = m*z + c.
+        return m, c 
+    
+    def check_lines_sign(self, left_line_eq, right_line_eq):
+        # Implement logic to check signs of left and right line equations to determine track direction. This can be used to assist in determining the track direction and to assist in switching between different navigation strategies based on the distance to the goal.
+        # By checking the signs of the slopes of the left and right line equations, we can determine the track direction. For example, if the slope of the left lane line is positive and the
+
+        # Right line should have a positive gradient
+        # Left line should have a negative gradient
+        if left_line_eq is None or right_line_eq is None:
+            return None  # Cannot determine track direction without both line equations
+        
+        left_slope = left_line_eq[0]
+        right_slope = right_line_eq[0]
+
+        if left_slope < 0 and right_slope > 0:
+            return 'forward'
+        elif left_slope > 0 and right_slope < 0:
+            return 'backward'
+        elif left_slope < 0 and right_slope < 0:
+            # Move heading towards the left lane to try to get a better view of the track direction
+            return 'left'
+        elif left_slope > 0 and right_slope > 0:
+            # Move heading towards the right lane to try to get a better view of the track direction
+            return 'right'
+        
+    
 
     def lane_timer_callback(self):
         # This timer callback will be called periodically to compute the centreline and desired heading based on the latest LiDAR and lane detection data. It will then publish the appropriate cmd_vel to navigate towards the goal.
         
-        # No centre line if we don't have both left and right lane points, so we can't compute a desired heading or navigate towards the goal without a centreline to follow. We will need to wait until we have both left and right lane points before we can compute the centreline and desired heading.
-        if not self.left_lane or not self.right_lane:
-            return
+        self.get_logger().info('Running lane_timer_callback to compute centreline and desired heading. Checking check_lines_sign: ' + str(self.check_lines_sign(self.get_line_lane_equation(self.left_lane), self.get_line_lane_equation(self.right_lane))))
+
+        turning_direction = self.check_lines_sign(self.get_line_lane_equation(self.left_lane), self.get_line_lane_equation(self.right_lane))
         
-        centreline = self.compute_centreline()
-
-        if not centreline:
-            return
-        
-        desired_offset = self.track_width / 2.0  # Desired offset from the centreline to follow, this can be adjusted based on the desired position of the robot on the track (e.g. closer to the left or right lane). For now, we will aim to follow the centreline, so the desired offset is half the track width.
-        print(f"self.left_lane: {self.left_lane}")
-        print(f"self.right_lane: {self.right_lane}")
-
-        # Check if we only see one of the lanes
-        # if len(self.left_lane) > len(self.right_lane) * self.one_lane_threshold_factor:
-        #     print("Only left lane detected, cannot compute centreline.")
-        #     avg_x = np.mean([point[0] for point in self.left_lane])
-
-        #     error = desired_offset - abs(avg_x)  # Compute the error based on the average x position of the detected lane points and the desired offset from the centreline. This is a simple proportional control approach where we compute the error as the difference between the desired offset and the actual offset based on the detected lane points, and we can use this error to compute a steering command to try to maintain the desired offset from the lane. We can adjust this to include a more sophisticated control approach if needed, such as a PID controller or a pure pursuit controller.
-
-        #     steering = self.K_steering * error  # Compute the steering command based on the error and the steering gain. This will determine how aggressively the robot tries to correct its position based on the detected lane points.
-        #     print(f"{steering=:.2f}, {error=:.2f}, {avg_x=:.2f}")
-        #     return
-        # elif len(self.right_lane) > len(self.left_lane) * self.one_lane_threshold_factor:
-        #     print("Only right lane detected, cannot compute centreline.")
-        #     avg_x = np.mean([point[0] for point in self.right_lane])
-        #     error = desired_offset - abs(avg_x)  # Compute the error based on the average x position of the detected lane points and the desired offset from the centreline.
-
-        #     steering = self.K_steering * error  # Compute the steering command based on the error and the steering gain.
-        #     print(f"{steering=:.2f}, {error=:.2f}, {avg_x=:.2f}")
-        #     return
-        
-        # Need enough centreline points
-        if len(centreline) < 2:
-            return
-
-        # Smooth direction tracking
-        start_idx = min(5, len(centreline) - 2)
-        end_idx = min(10, len(centreline) - 1)
-
-        dx_total = 0.0
-        dz_total = 0.0
-        count = 0
-
-        for i in range(start_idx, end_idx):
-            x1, y1, z1 = centreline[i]
-            x2, y2, z2 = centreline[i + 1]
-
-            dx_total += (x2 - x1)
-            dz_total += (z2 - z1)
-            count += 1
-
-        if count == 0:
-            return
-
-        desired_heading = math.atan2(dx_total, dz_total)
-
-        # Small correction toward centreline position
-        target_idx = min(8, len(centreline) - 1)
-        target_x, _, target_z = centreline[target_idx]
-
-        position_error = math.atan2(target_x, target_z)
-
-        # Blend both
-        steering_error = desired_heading + 0.5 * position_error
-
-        if self.test_track_follower_itself:
+        if turning_direction == 'left':
+            self.get_logger().info('Turning left to try to get a better view of the track direction based on the signs of the lane line equations.')
             cmd = Twist()
-            cmd.linear.x = 0.5  # Set a constant forward speed, this can be adjusted based on the distance to the target or other factors
-            cmd.angular.z = -1.0 * steering_error  # Proportional control for steering based on the error to the target
-            
-
+            cmd.linear.x = 0.2  # Move forward slowly while turning
+            cmd.angular.z = 0.5  # Turn left
             self.cmd_vel_pub.publish(cmd)
+            return
+        elif turning_direction == 'right':
+            self.get_logger().info('Turning right to try to get a better view of the track direction based on the signs of the lane line equations.')
+            cmd = Twist()
+            cmd.linear.x = 0.2  # Move forward slowly while turning
+            cmd.angular.z = -0.5  # Turn right
+            self.cmd_vel_pub.publish(cmd)
+            return
 
-        else:
-            # Sends behaviour_tree the computed centreline and desired heading to assist in determining the track direction and goal location, and to assist in switching between different navigation strategies based on the distance to the goal. The behaviour tree will then use this information to determine which navigation strategy to use (e.g. follow the gap, goal navigation, etc.) and to compute the appropriate cmd_vel to publish to navigate towards the goal.
+        elif turning_direction == 'forward':
+            self.get_logger().info('Track direction is forward based on the signs of the lane line equations.')
+            cmd = Twist()
+            cmd.linear.x = 0.5  # Move forward
+            cmd.angular.z = 0.0  # No turning
+            self.cmd_vel_pub.publish(cmd)
+            return
+
+        # Currently disabled this algorithm
+        if self.temp_lane_timer_cb_test:
+            # No centre line if we don't have both left and right lane points, so we can't compute a desired heading or navigate towards the goal without a centreline to follow. We will need to wait until we have both left and right lane points before we can compute the centreline and desired heading.
+            if not self.left_lane or not self.right_lane:
+                return
             
-            navigation_recommendation = NavigationRecommendation()
-            navigation_recommendation.source = 'track_follower'
-            navigation_recommendation.valid = True
-            navigation_recommendation.reason = 'centreline_computed'
-            navigation_recommendation.linear_x = 0.5  # This can be adjusted based on the distance to the target or other factors
-            navigation_recommendation.angular_z = -1.0 * steering_error  # Proportional control for steering based on the error to the target
-            self.behaviour_tree_publisher.publish(navigation_recommendation)
+            centreline = self.compute_centreline()
 
-        print(f"The centreline points are: {centreline}")
-        print(f"Computed centreline with {len(centreline)} points.")
-        # Here we would also compute the desired heading based on the centreline and LiDAR data, and then publish the cmd_vel to navigate towards the goal. This is where we would implement the logic to switch to a different navigation strategy when we are within a certain distance to the goal.
+            if not centreline:
+                return
+            
+            desired_offset = self.track_width / 2.0  # Desired offset from the centreline to follow, this can be adjusted based on the desired position of the robot on the track (e.g. closer to the left or right lane). For now, we will aim to follow the centreline, so the desired offset is half the track width.
+            # print(f"self.left_lane: {self.left_lane}")
+            # print(f"self.right_lane: {self.right_lane}")
+
+            # Check if we only see one of the lanes
+            # if len(self.left_lane) > len(self.right_lane) * self.one_lane_threshold_factor:
+            #     print("Only left lane detected, cannot compute centreline.")
+            #     avg_x = np.mean([point[0] for point in self.left_lane])
+
+            #     error = desired_offset - abs(avg_x)  # Compute the error based on the average x position of the detected lane points and the desired offset from the centreline. This is a simple proportional control approach where we compute the error as the difference between the desired offset and the actual offset based on the detected lane points, and we can use this error to compute a steering command to try to maintain the desired offset from the lane. We can adjust this to include a more sophisticated control approach if needed, such as a PID controller or a pure pursuit controller.
+
+            #     steering = self.K_steering * error  # Compute the steering command based on the error and the steering gain. This will determine how aggressively the robot tries to correct its position based on the detected lane points.
+            #     print(f"{steering=:.2f}, {error=:.2f}, {avg_x=:.2f}")
+            #     return
+            # elif len(self.right_lane) > len(self.left_lane) * self.one_lane_threshold_factor:
+            #     print("Only right lane detected, cannot compute centreline.")
+            #     avg_x = np.mean([point[0] for point in self.right_lane])
+            #     error = desired_offset - abs(avg_x)  # Compute the error based on the average x position of the detected lane points and the desired offset from the centreline.
+
+            #     steering = self.K_steering * error  # Compute the steering command based on the error and the steering gain.
+            #     print(f"{steering=:.2f}, {error=:.2f}, {avg_x=:.2f}")
+            #     return
+            
+            # Need enough centreline points
+            if len(centreline) < 2:
+                return
+
+            # Smooth direction tracking
+            start_idx = min(5, len(centreline) - 2)
+            end_idx = min(10, len(centreline) - 1)
+
+            dx_total = 0.0
+            dz_total = 0.0
+            count = 0
+
+            for i in range(start_idx, end_idx):
+                x1, y1, z1 = centreline[i]
+                x2, y2, z2 = centreline[i + 1]
+
+                dx_total += (x2 - x1)
+                dz_total += (z2 - z1)
+                count += 1
+
+            if count == 0:
+                return
+
+            desired_heading = math.atan2(dx_total, dz_total)
+
+            # Small correction toward centreline position
+            target_idx = min(8, len(centreline) - 1)
+            target_x, _, target_z = centreline[target_idx]
+
+            position_error = math.atan2(target_x, target_z)
+
+            # Blend both
+            steering_error = desired_heading + 0.5 * position_error
+
+            if self.test_track_follower_itself:
+                cmd = Twist()
+                cmd.linear.x = 0.5  # Set a constant forward speed, this can be adjusted based on the distance to the target or other factors
+                cmd.angular.z = -1.0 * steering_error  # Proportional control for steering based on the error to the target
+                
+
+                self.cmd_vel_pub.publish(cmd)
+
+            else:
+                # Sends behaviour_tree the computed centreline and desired heading to assist in determining the track direction and goal location, and to assist in switching between different navigation strategies based on the distance to the goal. The behaviour tree will then use this information to determine which navigation strategy to use (e.g. follow the gap, goal navigation, etc.) and to compute the appropriate cmd_vel to publish to navigate towards the goal.
+                
+                navigation_recommendation = NavigationRecommendation()
+                navigation_recommendation.source = 'track_follower'
+                navigation_recommendation.valid = True
+                navigation_recommendation.reason = 'centreline_computed'
+                navigation_recommendation.linear_x = 0.5  # This can be adjusted based on the distance to the target or other factors
+                navigation_recommendation.angular_z = -1.0 * steering_error  # Proportional control for steering based on the error to the target
+                self.behaviour_tree_publisher.publish(navigation_recommendation)
+
+            
+            # print(f"The centreline points are: {centreline}")
+            # print(f"Computed centreline with {len(centreline)} points.")
+            # Here we would also compute the desired heading based on the centreline and LiDAR data, and then publish the cmd_vel to navigate towards the goal. This is where we would implement the logic to switch to a different navigation strategy when we are within a certain distance to the goal.
 
     def lidar_listener_callback(self, msg):
         # Access LiDAR data from the LaserScan message
@@ -211,8 +281,11 @@ class TrackFollower(Node):
         self.left_lane = left_points
         self.right_lane = right_points
 
-        print(f"len(self.left_lane): {len(self.left_lane)}")
-        print(f"len(self.right_lane): {len(self.right_lane)}")
+        left_line_equation = self.get_line_lane_equation(self.left_lane)
+        right_line_equation = self.get_line_lane_equation(self.right_lane)
+
+        print(f"len(self.left_lane): {len(self.left_lane)}. Left Lane Equation: x = {left_line_equation[0]} * z + {left_line_equation[1]}" if left_line_equation else "No left lane points to compute line equation.")
+        print(f"len(self.right_lane): {len(self.right_lane)}. Right Lane Equation: x = {right_line_equation[0]} * z + {right_line_equation[1]}" if right_line_equation else "No right lane points to compute line equation.")
 
     def compute_centreline(self):
         # Can't compute a centreline if we don't have both left and right lane points

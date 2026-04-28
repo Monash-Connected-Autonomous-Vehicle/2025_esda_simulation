@@ -133,6 +133,11 @@ class BehaviourTree(Node):
         if self.current_state == NavigationState.CENTRELINE_FOLLOWING:
             # Implement logic for centreline following navigation strategy
             # self.latest_track_recommendation_msg
+            self.get_logger().info('Current state: CENTRELINE_FOLLOWING')
+
+            # Use the suggestions of the track_follower node
+            
+
             pass
         elif self.current_state == NavigationState.FOLLOW_THE_GAP:
             # Implement logic for follow the gap navigation strategy

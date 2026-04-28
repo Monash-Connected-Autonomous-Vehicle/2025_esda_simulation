@@ -255,12 +255,15 @@ class SimManager(ctk.CTk):
         # Prepare the command to source ROS and our workspace
         # We also disable SHM transport to avoid FastDDS errors in Docker
         full_command = (f'xterm -T "{name}" -geometry 100x30 -e "bash -c \\"'
-                        f'export FASTRTPS_DEFAULT_PROFILES_FILE={self.workspace_root}/src/esda_simulation_2025/config/fastdds_noshm.xml && '
-                        f'{ros_setup_cmd} && '
-                        f'{local_setup_cmd} && '
-                        f'echo Starting {name}... && '
-                        f'{command}; '
-                        f'echo; echo Process finished. Press Enter to close window...; read\\""')
+                f'export __NV_PRIME_RENDER_OFFLOAD=1 && '
+                f'export __GLX_VENDOR_LIBRARY_NAME=nvidia && '
+                f'export __VK_LAYER_NV_optimus=NVIDIA_only && '
+                f'export FASTRTPS_DEFAULT_PROFILES_FILE={self.workspace_root}/src/esda_simulation_2025/config/fastdds_noshm.xml && '
+                f'{ros_setup_cmd} && '
+                f'{local_setup_cmd} && '
+                f'echo Starting {name}... && '
+                f'{command}; '
+                f'echo; echo Process finished. Press Enter to close window...; read\\""')
 
         try:
             process = subprocess.Popen(full_command, shell=True, preexec_fn=os.setsid)

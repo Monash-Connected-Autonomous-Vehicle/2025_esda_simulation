@@ -423,7 +423,7 @@ class FollowTheGap(Node):
         return best_gap
     
     # This function checks if the path ahead is clear or not. If it is, then I would like track_follow to take over
-    def path_ahead_is_clear(self, forward_ranges, forward_angles, clear_distance=2.0):
+    def path_ahead_is_clear(self, forward_ranges, forward_angles, clear_distance=7.0):
         front_angle = math.radians(20.0)  # narrow forward cone
 
         front_mask = np.abs(forward_angles) < front_angle
@@ -477,19 +477,19 @@ class FollowTheGap(Node):
         forward_ranges = ranges[forward_mask]
         forward_angles = angles[forward_mask]
 
-        # if self.path_ahead_is_clear(forward_ranges, forward_angles):
-        #     self.get_logger().info('Path ahead is clear, yielding to track follower')
-        #     # Send message to the behaviour tree node to indicate that the path ahead is clear and that the robot can yield to the track follower node. This can be used to trigger a switch back to the track following strategy if the path ahead is clear.
-        #     follow_the_gap_msg_recommendation = NavigationRecommendation()
-        #     follow_the_gap_msg_recommendation.source = 'follow_the_gap'
-        #     follow_the_gap_msg_recommendation.valid = False  # Path ahead is clear, no need for FTG recommendation
-        #     follow_the_gap_msg_recommendation.confidence = 0.0  # No confidence in needing FTG recommendation
-        #     follow_the_gap_msg_recommendation.linear_x = 0.0
-        #     follow_the_gap_msg_recommendation.angular_z = 0.0
-        #     follow_the_gap_msg_recommendation.reason = 'path_ahead_clear'  # Custom field to indicate reason for yielding, can be used by the behaviour tree node to make informed decisions
+        if self.path_ahead_is_clear(forward_ranges, forward_angles):
+            self.get_logger().info('Path ahead is clear, yielding to track follower')
+            # Send message to the behaviour tree node to indicate that the path ahead is clear and that the robot can yield to the track follower node. This can be used to trigger a switch back to the track following strategy if the path ahead is clear.
+            follow_the_gap_msg_recommendation = NavigationRecommendation()
+            follow_the_gap_msg_recommendation.source = 'follow_the_gap'
+            follow_the_gap_msg_recommendation.valid = False  # Path ahead is clear, no need for FTG recommendation
+            follow_the_gap_msg_recommendation.confidence = 0.0  # No confidence in needing FTG recommendation
+            follow_the_gap_msg_recommendation.linear_x = 0.0
+            follow_the_gap_msg_recommendation.angular_z = 0.0
+            follow_the_gap_msg_recommendation.reason = 'path_ahead_clear'  # Custom field to indicate reason for yielding, can be used by the behaviour tree node to make informed decisions
 
-        #     self.behaviour_tree_publisher.publish(follow_the_gap_msg_recommendation)
-        #     return
+            self.behaviour_tree_publisher.publish(follow_the_gap_msg_recommendation)
+            return
 
         left_sector = forward_ranges[forward_angles > 0.25]
         right_sector = forward_ranges[forward_angles < -0.25]

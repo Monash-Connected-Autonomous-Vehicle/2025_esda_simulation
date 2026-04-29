@@ -28,8 +28,6 @@ from ament_index_python.packages import get_package_share_directory
 
 import subprocess
 
-import matplotlib.pyplot as plt
-
 # from build.esda_simulation_2025.rosidl_generator_py.esda_simulation_2025.msg._navigation_recommendation import NavigationRecommendation
 from esda_simulation_2025.msg import NavigationRecommendation
 
@@ -179,12 +177,7 @@ class FollowTheGap(Node):
             10
         )
 
-        self.lane_subscriber = self.create_subscription(
-            MarkerArray, 
-            '/lane_markers', 
-            self.lane_listener_callback, 
-            10
-        )
+
 
         self.behaviour_tree_publisher = self.create_publisher(
             NavigationRecommendation,
@@ -318,12 +311,7 @@ class FollowTheGap(Node):
         self.map_data = np.array(msg.data, dtype=np.int16).reshape((self.map_height, self.map_width))
         self.latest_map = msg
 
-
-    def lane_listener_callback(self, msg):
-        # Access lane detection data from the MarkerArray message
-        markers = msg.markers
-        
-        # Process lane markers to assist in determining track direction or goal location if needed. This can
+    
 
     def publish_cmd(self, linear_x, angular_z):
         cmd = Twist()
@@ -443,7 +431,7 @@ class FollowTheGap(Node):
                 self.frame_id,
                 self.robot_frame,
                 rclpy.time.Time(),
-                timeout=Duration(seconds=0.2)
+                timeout=Duration(seconds=0.02)
             )
             self.x = transform.transform.translation.x
             self.y = transform.transform.translation.y
@@ -580,7 +568,7 @@ class FollowTheGap(Node):
 
         # If self.recommendation_config is True, publish the recommended cmd_vel to the behaviour tree node, otherwise just execute the cmd_vel without publishing to the behaviour tree node. This allows for testing the FTG algorithm in isolation without affecting the overall behaviour tree logic.
         if self.recommendation_config:
-            self.get_logger().info('Publishing Follow the Gap recommendation to behaviour tree node\n===================================================================================================================================================================')
+            # self.get_logger().info('Publishing Follow the Gap recommendation to behaviour tree node\n===================================================================================================================================================================')
             follow_the_gap_msg_recommendation = NavigationRecommendation()
             follow_the_gap_msg_recommendation.source = 'follow_the_gap'
             follow_the_gap_msg_recommendation.valid = True
@@ -594,11 +582,9 @@ class FollowTheGap(Node):
         else:
             self.publish_cmd(linear_x, angular_z)
 
-        self.get_logger().info(
-            f'gap_angle={math.degrees(gap_center_angle):.1f} deg, '
-            f'gap_depth={gap_depth:.2f} m, '
-            f'cmd=({linear_x:.2f} m/s, {angular_z:.2f} rad/s)'
-        )
+        # self.get_logger().info(
+        #     f'gap_angle={math.degrees(gap_center_angle):.1f} deg, 'f'gap_depth={gap_depth:.2f} m, 'f'cmd=({linear_x:.2f} m/s, {angular_z:.2f} rad/s)'
+        # )
 
         # Saving the previous state as the current state
         self.previous_state = self.current_state

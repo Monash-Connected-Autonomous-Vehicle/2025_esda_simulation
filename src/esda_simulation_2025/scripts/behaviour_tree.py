@@ -134,7 +134,7 @@ class BehaviourTree(Node):
             # Implement logic for centreline following navigation strategy
             # self.latest_track_recommendation_msg
             self.get_logger().info('Current state: CENTRELINE_FOLLOWING')
-
+            
             # Use the suggestions of the track_follower node
             
 

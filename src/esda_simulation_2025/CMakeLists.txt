@@ -61,6 +61,7 @@ install(PROGRAMS
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/NavigationRecommendation.msg"
+  "msg/LaneParameters.msg"
   DEPENDENCIES std_msgs
 )
 

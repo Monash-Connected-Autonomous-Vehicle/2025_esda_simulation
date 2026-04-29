@@ -1,0 +1,11 @@
+std_msgs/Header header
+
+bool left_lane_detected
+bool right_lane_detected
+
+float32 left_lane_gradient
+float32 left_lane_x_intercept
+float32 right_lane_gradient
+float32 right_lane_x_intercept
+
+float32 confidence

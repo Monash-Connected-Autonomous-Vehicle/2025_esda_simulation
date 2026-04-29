@@ -29,7 +29,7 @@ from ament_index_python.packages import get_package_share_directory
 import subprocess
 
 # from build.esda_simulation_2025.rosidl_generator_py.esda_simulation_2025.msg._navigation_recommendation import NavigationRecommendation
-from esda_simulation_2025.msg import NavigationRecommendation
+from esda_simulation_2025.msg import NavigationRecommendation, LaneParameters
 
 
 # Define the FollowTheGap class, which will implement the "Follow the Gap" algorithm for navigation
@@ -177,8 +177,6 @@ class FollowTheGap(Node):
             10
         )
 
-
-
         self.behaviour_tree_publisher = self.create_publisher(
             NavigationRecommendation,
             '/follow_the_gap_recommendation', 
@@ -186,6 +184,14 @@ class FollowTheGap(Node):
         )
 
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+
+        # Subscribe to lane parameters from the track follower node to ensure that the robot stays within the lane while following gaps. This can help improve safety and reliability by leveraging the lane information provided by the track follower node to avoid navigating towards gaps that lead outside of the lane boundaries.
+        self.lane_parameters_subscriber = self.create_subscription(
+            LaneParameters,
+            '/lane_parameters',
+            self.lane_parameters_callback,
+            10
+        )
 
         # State variables for debugging and potential future use in the behaviour tree node
         self.previous_state = None
@@ -197,6 +203,22 @@ class FollowTheGap(Node):
         self.get_logger().info(f'Robot radius: {self.robot_radius:.3f} m')
         self.get_logger().info(f'FTG safety radius: {self.ftg_safety_radius:.3f} m')
         self.get_logger().info(f'Safe distance threshold: {self.safe_distance:.3f} m')
+
+    def is_within_lane(self, right_lane_parameters, left_lane_parameters):
+        self.get_logger().info(f'Received lane parameters - Right lane: gradient={right_lane_parameters[0]:.3f}, x_intercept={right_lane_parameters[1]:.3f} | Left lane: gradient={left_lane_parameters[0]:.3f}, x_intercept={left_lane_parameters[1]:.3f}')
+
+        pass
+
+    def lane_parameters_callback(self, msg):
+        # This callback can be used to receive lane parameters from the track follower node, which can then be used to enhance the gap scoring by considering the lane information. For example, if the lane parameters indicate that the robot is close to the edge of the lane, the gap scoring can be adjusted to prefer gaps that are more centered within the lane, or to avoid gaps that lead towards the edge of the lane. This can help improve the safety and reliability of the navigation by leveraging the lane information provided by the track follower node.
+        right_lane_gradient = msg.right_lane_gradient
+        right_lane_x_intercept = msg.right_lane_x_intercept
+        left_lane_gradient = msg.left_lane_gradient
+        left_lane_x_intercept = msg.left_lane_x_intercept
+        
+        self.is_within_lane(right_lane_parameters=(right_lane_gradient, right_lane_x_intercept), left_lane_parameters=(left_lane_gradient, left_lane_x_intercept))
+
+    
 
     def footprint_is_map_safe(self, yaw, max_distance=1.5, step=0.10):
         if self.latest_map is None:

@@ -180,6 +180,13 @@ class SimManager(ctk.CTk):
             "LANE": self.slam_button.cget("fg_color")
         }
 
+    def nvidia_env(self):
+        return (
+            "export __NV_PRIME_RENDER_OFFLOAD=1 && "
+            "export __GLX_VENDOR_LIBRARY_NAME=nvidia && "
+            "export __VK_LAYER_NV_optimus=NVIDIA_only && "
+        )
+
     def scan_world_files(self):
         """Scan the worlds directory for .sdf files"""
         worlds_dir = f"{self.workspace_root}/src/esda_simulation_2025/worlds"
@@ -255,9 +262,7 @@ class SimManager(ctk.CTk):
         # Prepare the command to source ROS and our workspace
         # We also disable SHM transport to avoid FastDDS errors in Docker
         full_command = (f'xterm -T "{name}" -geometry 100x30 -e "bash -c \\"'
-                f'export __NV_PRIME_RENDER_OFFLOAD=1 && '
-                f'export __GLX_VENDOR_LIBRARY_NAME=nvidia && '
-                f'export __VK_LAYER_NV_optimus=NVIDIA_only && '
+                f'{self.nvidia_env()}'
                 f'export FASTRTPS_DEFAULT_PROFILES_FILE={self.workspace_root}/src/esda_simulation_2025/config/fastdds_noshm.xml && '
                 f'{ros_setup_cmd} && '
                 f'{local_setup_cmd} && '
@@ -312,7 +317,14 @@ class SimManager(ctk.CTk):
         self.status_label.configure(text="Building... Check terminal window", text_color="#F1C40F")
         self.update()
         
-        cmd = f'xterm -T "Build Process" -e "bash -c \\"cd {self.workspace_root} && colcon build --packages-select esda_simulation_2025; echo; echo Done. Press Enter to close.; read\\""'
+        # cmd = f'xterm -T "Build Process" -e "bash -c \\"cd {self.workspace_root} && colcon build --packages-select esda_simulation_2025; echo; echo Done. Press Enter to close.; read\\""'
+        cmd = (
+            f'xterm -T "Build Process" -e "bash -c \\"'
+            f'{self.nvidia_env()}'
+            f'cd {self.workspace_root} && '
+            f'colcon build --packages-select esda_simulation_2025; '
+            f'echo; echo Done. Press Enter to close.; read\\""'
+        )
         proc = subprocess.run(cmd, shell=True)
         
         self.status_label.configure(text="Build attempt finished", text_color="#BDC3C7")
@@ -506,13 +518,11 @@ class SimManager(ctk.CTk):
             ros_setup_cmd = f"source {ros_setup}"
 
         cmd = (f'xterm -T "Clock Diagnostics" -geometry 80x20 -e "bash -c \\"'
-               f'{ros_setup_cmd} && '
-               f'echo \\"Checking /clock topic (simulation time)...\\" && '
-               f'echo \\"If you see data, simulation time is working.\\" && '
-               f'echo \\"If timeout, check if simulation is running.\\" && '
-               f'echo && '
-               f'ros2 topic echo /clock --once; '
-               f'echo && echo \\"Press Enter to close...\\" && read\\""')
+            f'{self.nvidia_env()}'
+            f'{ros_setup_cmd} && '
+            f'echo \\"Checking /clock topic (simulation time)...\\" && '
+            f'ros2 topic echo /clock --once; '
+            f'echo && echo \\"Press Enter to close...\\" && read\\""')
         
         subprocess.Popen(cmd, shell=True)
         self.status_label.configure(text="Diagnostics window opened", text_color="#3498DB")
@@ -522,7 +532,11 @@ class SimManager(ctk.CTk):
         self.status_label.configure(text="Launching Waypoint Navigator...", text_color="#F1C40F")
         self.update()
         
-        cmd = f"python3 {self.workspace_root}/src/esda_simulation_2025/scripts/waypoint_navigator.py"
+        # cmd = f"python3 {self.workspace_root}/src/esda_simulation_2025/scripts/waypoint_navigator.py"
+        cmd = (
+            f"{self.nvidia_env()} "
+            f"python3 {self.workspace_root}/src/esda_simulation_2025/scripts/waypoint_navigator.py"
+        )
         
         try:
             subprocess.Popen(cmd, shell=True)

@@ -12,7 +12,7 @@ import rclpy
 from rclpy.node import Node
 
 # from build.esda_simulation_2025.rosidl_generator_py.esda_simulation_2025.msg._navigation_recommendation import NavigationRecommendation
-from esda_simulation_2025.msg import NavigationRecommendation
+from esda_simulation_2025.msg import NavigationRecommendation, LaneParameters
 
 
 # This node is the main node that will handle the overall track following around the entire map. It will subscribe to the laser scan data and implement the follow the gap algorithm to navigate around the track. It will also handle switching to a different navigation strategy when the robot is within a certain distance to the goal.
@@ -48,6 +48,10 @@ class TrackFollower(Node):
         self.test_track_follower_itself = self.get_parameter('test_track_follower_itself').get_parameter_value().bool_value
 
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10) 
+
+        # Publisher for lane parameters to assist in determining the track direction and to assist in switching between different navigation strategies based on the distance to the goal. This will allow us to publish the computed lane parameters (e.g. lane curvature, lane offset, etc.) to a topic that can be subscribed to by the behaviour tree or other nodes to assist in decision making for navigation.
+        self.lane_parameters_publisher = self.create_publisher(LaneParameters, '/lane_parameters', 10)  
+
         self.goal_distance_threshold = 0.5  # Distance threshold to switch to goal navigation
         self.current_goal = None  # Placeholder for the current goal position
 
@@ -140,6 +144,15 @@ class TrackFollower(Node):
 
         turning_direction = self.check_lines_sign(self.get_line_lane_equation(self.left_lane), self.get_line_lane_equation(self.right_lane))
         
+        lane_parameters_send_ftg = LaneParameters()
+        lane_parameters_send_ftg.left_lane_gradient = self.get_line_lane_equation(self.left_lane)[0] if self.get_line_lane_equation(self.left_lane) else 0.0
+        lane_parameters_send_ftg.left_lane_x_intercept = self.get_line_lane_equation(self.left_lane)[1] if self.get_line_lane_equation(self.left_lane) else 0.0
+        lane_parameters_send_ftg.right_lane_gradient = self.get_line_lane_equation(self.right_lane)[0] if self.get_line_lane_equation(self.right_lane) else 0.0
+        lane_parameters_send_ftg.right_lane_x_intercept = self.get_line_lane_equation(self.right_lane)[1] if self.get_line_lane_equation(self.right_lane) else 0.0
+        lane_parameters_send_ftg.confidence = 1.0
+        self.lane_parameters_publisher.publish(lane_parameters_send_ftg)
+
+
         if turning_direction == 'left':
             self.get_logger().info('Turning left to try to get a better view of the track direction based on the signs of the lane line equations.')
             cmd = Twist()

@@ -135,68 +135,122 @@ class TrackFollower(Node):
             # Move heading towards the right lane to try to get a better view of the track direction
             return 'right'
         
-    
+    def compute_steering_from_centreline(self, left_eq=None, right_eq=None, lane_side=None, lookahead_z=2.0):
+        """
+        Computes steering error using lane line equations.
+
+        Cases:
+        - both left_eq and right_eq exist: follow estimated centre between lanes
+        - only left_eq exists: estimate centre by shifting right from left lane
+        - only right_eq exists: estimate centre by shifting left from right lane
+        """
+
+        half_width = self.track_width / 2.0
+
+        if left_eq is not None and right_eq is not None:
+            left_x = left_eq[0] * lookahead_z + left_eq[1]
+            right_x = right_eq[0] * lookahead_z + right_eq[1]
+            target_x = (left_x + right_x) / 2.0
+
+        elif left_eq is not None and lane_side == "left":
+            left_x = left_eq[0] * lookahead_z + left_eq[1]
+            target_x = left_x + half_width
+
+        elif right_eq is not None and lane_side == "right":
+            right_x = right_eq[0] * lookahead_z + right_eq[1]
+            target_x = right_x - half_width
+
+        else:
+            return None
+
+        steering_error = math.atan2(target_x, lookahead_z)
+        return steering_error
 
     def lane_timer_callback(self):
-        # This timer callback will be called periodically to compute the centreline and desired heading based on the latest LiDAR and lane detection data. It will then publish the appropriate cmd_vel to navigate towards the goal.
-        
-        self.get_logger().info('Running lane_timer_callback to compute centreline and desired heading. Checking check_lines_sign: ' + str(self.check_lines_sign(self.get_line_lane_equation(self.left_lane), self.get_line_lane_equation(self.right_lane))))
+        left_visible = len(self.left_lane) >= 2
+        right_visible = len(self.right_lane) >= 2
 
-        
+        left_eq = self.get_line_lane_equation(self.left_lane) if left_visible else None
+        right_eq = self.get_line_lane_equation(self.right_lane) if right_visible else None
 
-        left_eq = self.get_line_lane_equation(self.left_lane)
-        right_eq = self.get_line_lane_equation(self.right_lane)
-
-        lane_msg = LaneParameters()
-        lane_msg.left_lane_gradient = left_eq[0] if left_eq else 0.0
-        lane_msg.left_lane_x_intercept = left_eq[1] if left_eq else 0.0
-        lane_msg.right_lane_gradient = right_eq[0] if right_eq else 0.0
-        lane_msg.right_lane_x_intercept = right_eq[1] if right_eq else 0.0
-        lane_msg.confidence = 1.0 if left_eq and right_eq else 0.5
-        self.lane_parameters_publisher.publish(lane_msg)
+        self.get_logger().info(
+            f"left_points={len(self.left_lane)}, right_points={len(self.right_lane)}, "
+            f"left_eq={left_eq is not None}, right_eq={right_eq is not None}"
+        )
 
         rec = NavigationRecommendation()
         rec.source = "track_follower"
         rec.valid = True
 
-        direction = self.check_lines_sign(left_eq, right_eq)
+        # Both lanes visible
+        if left_eq is not None and right_eq is not None:
+            steering_error = self.compute_steering_from_centreline(
+                left_eq=left_eq,
+                right_eq=right_eq
+            )
 
-        if direction == "forward":
-            rec.reason = "both_lanes_forward"
-            rec.linear_x = 0.5
-            rec.angular_z = 0.0
+            angular = -2.0 * steering_error
+            angular = max(min(angular, 0.9), -0.9)
 
-        elif direction == "left":
-            rec.reason = "both_lanes_suggest_left"
-            rec.linear_x = 0.25
-            rec.angular_z = 0.4
+            speed = 0.45 - min(abs(angular), 0.9) * 0.25
 
-        elif direction == "right":
-            rec.reason = "both_lanes_suggest_right"
-            rec.linear_x = 0.25
-            rec.angular_z = -0.4
+            rec.reason = "both_lane_line_following"
+            rec.linear_x = speed
+            rec.angular_z = angular
+            self.behaviour_tree_publisher.publish(rec)
+            return
 
-        elif left_eq is not None and right_eq is None:
-            # Only left lane visible.
-            # Stay away from left lane, bias slightly right.
-            rec.reason = "only_left_lane_visible"
-            rec.linear_x = 0.25
-            rec.angular_z = -0.25
+        # Only left lane visible
+        if left_eq is not None and right_eq is None:
+            steering_error = self.compute_steering_from_centreline(
+                left_eq=left_eq,
+                lane_side="left"
+            )
 
-        elif right_eq is not None and left_eq is None:
-            # Only right lane visible.
-            # Stay away from right lane, bias slightly left.
-            rec.reason = "only_right_lane_visible"
-            rec.linear_x = 0.25
-            rec.angular_z = 0.25
+            if steering_error is None:
+                rec.valid = False
+                rec.reason = "left_lane_visible_but_no_steering"
+                rec.linear_x = 0.0
+                rec.angular_z = 0.0
+            else:
+                angular = -2.0 * steering_error
+                angular = max(min(angular, 0.8), -0.8)
 
-        else:
-            # No lane info. Let FTG/behaviour tree take over.
-            rec.reason = "no_lanes_visible"
-            rec.valid = False
-            rec.linear_x = 0.0
-            rec.angular_z = 0.0
+                rec.reason = "single_left_lane_following"
+                rec.linear_x = 0.25
+                rec.angular_z = angular
 
+            self.behaviour_tree_publisher.publish(rec)
+            return
+
+        # Only right lane visible
+        if right_eq is not None and left_eq is None:
+            steering_error = self.compute_steering_from_centreline(
+                right_eq=right_eq,
+                lane_side="right"
+            )
+
+            if steering_error is None:
+                rec.valid = False
+                rec.reason = "right_lane_visible_but_no_steering"
+                rec.linear_x = 0.0
+                rec.angular_z = 0.0
+            else:
+                angular = -2.0 * steering_error
+                angular = max(min(angular, 0.8), -0.8)
+
+                rec.reason = "single_right_lane_following"
+                rec.linear_x = 0.25
+                rec.angular_z = angular
+
+            self.behaviour_tree_publisher.publish(rec)
+            return
+
+        # No lanes visible
+        rec.reason = "no_lanes_visible"
+        rec.valid = False
+        rec.linear_x = 0.0
+        rec.angular_z = 0.0
         self.behaviour_tree_publisher.publish(rec)
 
         # Currently disabled this algorithm

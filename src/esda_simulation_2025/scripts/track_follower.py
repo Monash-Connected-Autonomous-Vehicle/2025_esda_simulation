@@ -142,39 +142,62 @@ class TrackFollower(Node):
         
         self.get_logger().info('Running lane_timer_callback to compute centreline and desired heading. Checking check_lines_sign: ' + str(self.check_lines_sign(self.get_line_lane_equation(self.left_lane), self.get_line_lane_equation(self.right_lane))))
 
-        turning_direction = self.check_lines_sign(self.get_line_lane_equation(self.left_lane), self.get_line_lane_equation(self.right_lane))
         
-        lane_parameters_send_ftg = LaneParameters()
-        lane_parameters_send_ftg.left_lane_gradient = self.get_line_lane_equation(self.left_lane)[0] if self.get_line_lane_equation(self.left_lane) else 0.0
-        lane_parameters_send_ftg.left_lane_x_intercept = self.get_line_lane_equation(self.left_lane)[1] if self.get_line_lane_equation(self.left_lane) else 0.0
-        lane_parameters_send_ftg.right_lane_gradient = self.get_line_lane_equation(self.right_lane)[0] if self.get_line_lane_equation(self.right_lane) else 0.0
-        lane_parameters_send_ftg.right_lane_x_intercept = self.get_line_lane_equation(self.right_lane)[1] if self.get_line_lane_equation(self.right_lane) else 0.0
-        lane_parameters_send_ftg.confidence = 1.0
-        self.lane_parameters_publisher.publish(lane_parameters_send_ftg)
 
+        left_eq = self.get_line_lane_equation(self.left_lane)
+        right_eq = self.get_line_lane_equation(self.right_lane)
 
-        if turning_direction == 'left':
-            self.get_logger().info('Turning left to try to get a better view of the track direction based on the signs of the lane line equations.')
-            cmd = Twist()
-            cmd.linear.x = 0.2  # Move forward slowly while turning
-            cmd.angular.z = 0.5  # Turn left
-            self.cmd_vel_pub.publish(cmd)
-            return
-        elif turning_direction == 'right':
-            self.get_logger().info('Turning right to try to get a better view of the track direction based on the signs of the lane line equations.')
-            cmd = Twist()
-            cmd.linear.x = 0.2  # Move forward slowly while turning
-            cmd.angular.z = -0.5  # Turn right
-            self.cmd_vel_pub.publish(cmd)
-            return
+        lane_msg = LaneParameters()
+        lane_msg.left_lane_gradient = left_eq[0] if left_eq else 0.0
+        lane_msg.left_lane_x_intercept = left_eq[1] if left_eq else 0.0
+        lane_msg.right_lane_gradient = right_eq[0] if right_eq else 0.0
+        lane_msg.right_lane_x_intercept = right_eq[1] if right_eq else 0.0
+        lane_msg.confidence = 1.0 if left_eq and right_eq else 0.5
+        self.lane_parameters_publisher.publish(lane_msg)
 
-        elif turning_direction == 'forward':
-            self.get_logger().info('Track direction is forward based on the signs of the lane line equations.')
-            cmd = Twist()
-            cmd.linear.x = 0.5  # Move forward
-            cmd.angular.z = 0.0  # No turning
-            self.cmd_vel_pub.publish(cmd)
-            return
+        rec = NavigationRecommendation()
+        rec.source = "track_follower"
+        rec.valid = True
+
+        direction = self.check_lines_sign(left_eq, right_eq)
+
+        if direction == "forward":
+            rec.reason = "both_lanes_forward"
+            rec.linear_x = 0.5
+            rec.angular_z = 0.0
+
+        elif direction == "left":
+            rec.reason = "both_lanes_suggest_left"
+            rec.linear_x = 0.25
+            rec.angular_z = 0.4
+
+        elif direction == "right":
+            rec.reason = "both_lanes_suggest_right"
+            rec.linear_x = 0.25
+            rec.angular_z = -0.4
+
+        elif left_eq is not None and right_eq is None:
+            # Only left lane visible.
+            # Stay away from left lane, bias slightly right.
+            rec.reason = "only_left_lane_visible"
+            rec.linear_x = 0.25
+            rec.angular_z = -0.25
+
+        elif right_eq is not None and left_eq is None:
+            # Only right lane visible.
+            # Stay away from right lane, bias slightly left.
+            rec.reason = "only_right_lane_visible"
+            rec.linear_x = 0.25
+            rec.angular_z = 0.25
+
+        else:
+            # No lane info. Let FTG/behaviour tree take over.
+            rec.reason = "no_lanes_visible"
+            rec.valid = False
+            rec.linear_x = 0.0
+            rec.angular_z = 0.0
+
+        self.behaviour_tree_publisher.publish(rec)
 
         # Currently disabled this algorithm
         if self.temp_lane_timer_cb_test:

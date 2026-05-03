@@ -136,7 +136,19 @@ class BehaviourTree(Node):
             self.get_logger().info('Current state: CENTRELINE_FOLLOWING')
             
             # Use the suggestions of the track_follower node
+            if self.latest_follow_the_gap_recommendation_msg is not None and self.latest_follow_the_gap_recommendation_msg.valid and self.latest_follow_the_gap_recommendation_msg.reason == 'path_blocked':
+                self.get_logger().info('Follow The Gap recommendation is valid, switching to Follow The Gap state ===================================================================================================================================================================')
+                self.current_state = NavigationState.FOLLOW_THE_GAP
+                return
             
+            # Get the message from the track follower node and check if it is still valid based on the timestamp. If it is valid, we can use the recommended linear and angular velocities from the track follower node to control the robot's movement in the centreline following state. If the message is too old, we may choose to switch to a different navigation strategy or enter a recovery state to handle the situation appropriately.
+            if self.latest_track_recommendation_msg is not None:
+                self.get_logger().info(f'Latest Track Follower recommendation: valid={self.latest_track_recommendation_msg.valid}, reason={self.latest_track_recommendation_msg.reason}, linear_x={self.latest_track_recommendation_msg.linear_x:.2f}, angular_z={self.latest_track_recommendation_msg.angular_z:.2f}')
+
+                twist_cmd_msg = Twist()
+                twist_cmd_msg.linear.x = self.latest_track_recommendation_msg.linear_x
+                twist_cmd_msg.angular.z = self.latest_track_recommendation_msg.angular_z
+                self.publish_cmd_vel(twist_cmd_msg.linear.x, twist_cmd_msg.angular.z)
 
             pass
         elif self.current_state == NavigationState.FOLLOW_THE_GAP:
@@ -218,7 +230,7 @@ class BehaviourTree(Node):
         self.latest_follow_the_gap_recommendation_timestamp = self.get_clock().now()
         
         self.get_logger().info(
-            f'Received Follow the Gap recommendation: valid={msg.valid}, confidence={msg.confidence:.2f}, linear_x={msg.linear_x:.2f}, angular_z={msg.angular_z:.2f}'
+            f'Received Follow the Gap recommendation: valid={msg.valid}, confidence={msg.confidence:.2f}, linear_x={msg.linear_x:.2f}, angular_z={msg.angular_z:.2f}, reason={msg.reason}'
         )
 
 def main():

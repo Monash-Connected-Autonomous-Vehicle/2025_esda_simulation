@@ -123,13 +123,24 @@ class SimManager(ctk.CTk):
 
         # Remove SLAM Options Section (now merged)
 
+        # Hardware Section - ZED Camera
+        self.hardware_label = ctk.CTkLabel(self, text="Hardware Integration", font=("Orbitron", 13, "italic"), text_color=self.accent_green, bg_color=self.bg_dark)
+        self.hardware_label.grid(row=4, column=0, pady=(8, 2))
+
+        self.hardware_frame = ctk.CTkFrame(self, fg_color=self.bg_panel)
+        self.hardware_frame.grid(row=5, column=0, pady=6, padx=12, sticky="ew")
+        self.hardware_frame.grid_columnconfigure(0, weight=1)
+        
+        self.zed_button = ctk.CTkButton(self.hardware_frame, text="Launch ZED2 Camera", command=self.toggle_zed, font=("Orbitron", 12), fg_color=self.accent_green, hover_color="#00CC99", text_color=self.bg_dark)
+        self.zed_button.grid(row=0, column=0, padx=6, pady=6, sticky="ew")
+
         # Modules Label
         self.mod_label = ctk.CTkLabel(self, text="Navigation & SLAM Modules", font=("Orbitron", 13, "italic"), text_color=self.accent_blue, bg_color=self.bg_dark)
-        self.mod_label.grid(row=5, column=0, pady=(8, 2))
+        self.mod_label.grid(row=6, column=0, pady=(8, 2))
 
         # Modules Section
         self.modules_frame = ctk.CTkFrame(self, fg_color=self.bg_panel)
-        self.modules_frame.grid(row=6, column=0, pady=6, padx=12, sticky="ew")
+        self.modules_frame.grid(row=7, column=0, pady=6, padx=12, sticky="ew")
         
         self.slam_button = ctk.CTkButton(self.modules_frame, text="Launch SLAM", command=self.toggle_slam, font=("Orbitron", 12), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
         self.slam_button.grid(row=0, column=0, padx=6, pady=6, sticky="ew")
@@ -143,7 +154,7 @@ class SimManager(ctk.CTk):
 
         # Teleop and Waypoint Section
         self.teleop_frame = ctk.CTkFrame(self, fg_color=self.bg_panel)
-        self.teleop_frame.grid(row=7, column=0, pady=6, padx=12, sticky="ew")
+        self.teleop_frame.grid(row=8, column=0, pady=6, padx=12, sticky="ew")
         self.teleop_frame.grid_columnconfigure((0,1), weight=1)
         
         self.teleop_button = ctk.CTkButton(self.teleop_frame, text="WASD Teleop", command=self.toggle_teleop,
@@ -158,15 +169,15 @@ class SimManager(ctk.CTk):
         # Diagnostics Section
         self.diag_button = ctk.CTkButton(self, text="Check /clock Topic (Diagnostics)", command=self.check_clock,
                          fg_color=self.accent_purple, hover_color="#5F27CD", font=("Orbitron", 11), text_color=self.bg_dark)
-        self.diag_button.grid(row=8, column=0, pady=3, padx=12, sticky="ew")
+        self.diag_button.grid(row=9, column=0, pady=3, padx=12, sticky="ew")
 
         # Emergency Section
         self.kill_button = ctk.CTkButton(self, text="KILL ALL PROCESSES & RESET GAZEBO", command=self.kill_all, 
                          fg_color=self.accent_red, hover_color="#7B241C", font=("Orbitron", 12, "bold"), text_color=self.bg_dark)
-        self.kill_button.grid(row=9, column=0, pady=10, padx=12, sticky="ew")
+        self.kill_button.grid(row=10, column=0, pady=10, padx=12, sticky="ew")
 
         self.status_label = ctk.CTkLabel(self, text="System Ready", text_color=self.fg_dim, font=("Orbitron", 10), bg_color=self.bg_dark)
-        self.status_label.grid(row=10, column=0, pady=4)
+        self.status_label.grid(row=11, column=0, pady=4)
 
         # Check for xterm
         self.check_xterm()
@@ -179,6 +190,7 @@ class SimManager(ctk.CTk):
             "NAV": self.nav_button.cget("fg_color"),
             "RVIZ": self.rviz_button.cget("fg_color"),
             "TELEOP": self.teleop_button.cget("fg_color"),
+            "ZED": self.zed_button.cget("fg_color"),
             "LANE": self.slam_button.cget("fg_color")
         }
 
@@ -293,6 +305,7 @@ class SimManager(ctk.CTk):
         elif name == "NAV": self.nav_button.configure(fg_color=color)
         elif name == "RVIZ": self.rviz_button.configure(fg_color=color)
         elif name == "TELEOP": self.teleop_button.configure(fg_color=color)
+        elif name == "ZED": self.zed_button.configure(fg_color=color)
         elif name == "LANE":
             # Lane detection doesn't have its own button, just update status
             pass
@@ -471,6 +484,14 @@ class SimManager(ctk.CTk):
         # We need to run telemetry inside the script location
         cmd = f"python3 {self.workspace_root}/src/esda_simulation_2025/scripts/teleop_wasd.py"
         self.run_in_terminal("TELEOP", cmd)
+
+    def toggle_zed(self):
+        """Launch or stop ZED2 camera with CUDA environment setup"""
+        cmd = (f"export CUDA_HOME=/usr/local/cuda-12.2 && "
+               f"export PATH=$CUDA_HOME/bin:$PATH && "
+               f"export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH && "
+               f"ros2 launch esda_hardware_2025 zed_hardware.launch.py")
+        self.run_in_terminal("ZED", cmd)
 
     def kill_all(self):
         self.status_label.configure(text="Cleaning up Gazebo and processes...", text_color="#E74C3C")

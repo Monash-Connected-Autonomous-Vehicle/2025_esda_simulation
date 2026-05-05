@@ -135,6 +135,9 @@ class BehaviourTree(Node):
             # self.latest_track_recommendation_msg
             self.get_logger().info('Current state: CENTRELINE_FOLLOWING')
             
+            # Debugging: Log the latest track follower recommendation message to see if it is valid and what the recommended linear and angular velocities are. This will help us understand how the track follower node is influencing our navigation strategy in the centreline following state.
+            self.destroy_node()
+            
             # Use the suggestions of the track_follower node
             if self.latest_follow_the_gap_recommendation_msg is not None and self.latest_follow_the_gap_recommendation_msg.valid and self.latest_follow_the_gap_recommendation_msg.reason == 'path_blocked':
                 self.get_logger().info('Follow The Gap recommendation is valid, switching to Follow The Gap state ===================================================================================================================================================================')

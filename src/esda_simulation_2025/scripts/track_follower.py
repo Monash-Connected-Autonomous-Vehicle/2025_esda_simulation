@@ -56,7 +56,7 @@ class TrackFollower(Node):
         self.current_goal = None  # Placeholder for the current goal position
 
         
-        self.track_width = 4.0 # Assume a 4 metre track width for computing the centreline from the lane detection data, this can be adjusted based on the actual track width in the simulation or real world environment.
+        self.track_width = 2.3 # Assume a 4 metre track width for computing the centreline from the lane detection data, this can be adjusted based on the actual track width in the simulation or real world environment.
         self.one_lane_threshold_factor = 1.2  # Threshold for determining if we only see one lane, this can be adjusted based on the expected distance between the lanes and the noise in the lane detection data. If the average x position of the detected lane points is within this threshold from the desired offset, we can consider that we only see one lane and adjust our control strategy accordingly.
 
         self.temp_lane_timer_cb_test = False  # Temporary variable to control whether to run the lane_timer_callback for testing purposes, this can be removed once we have the lane_timer_callback fully implemented and tested.
@@ -135,14 +135,32 @@ class TrackFollower(Node):
             # Move heading towards the right lane to try to get a better view of the track direction
             return 'right'
         
-    
+    def check_measured_lane_width(self, left_line_eq, right_line_eq, lookahead_z=1.5):
+        # Implement logic to check the measured lane width based on the left and right line equations at a certain lookahead distance (lookahead_z) to determine if it is consistent with the expected track width. This can be used to assist in determining the track direction and to assist in switching between different navigation strategies based on the distance to the goal.
+        if left_line_eq is None or right_line_eq is None:
+            return None  # Cannot check lane width without both line equations
+        
+        left_x = left_line_eq[0] * lookahead_z + left_line_eq[1]
+        right_x = right_line_eq[0] * lookahead_z + right_line_eq[1]
+
+        measured_lane_width = abs(right_x - left_x)
+
+        self.get_logger().info(f"\nMeasured lane width at lookahead distance {lookahead_z}: {measured_lane_width:.2f} (Left x: {left_x:.2f}, Right x: {right_x:.2f})\n")
+
+        if measured_lane_width < self.track_width * 0.5:
+            return 'too_narrow'
+        elif measured_lane_width > self.track_width * 1.5:
+            return 'too_wide'
+        else:
+            return 'normal'
 
     def lane_timer_callback(self):
         # This timer callback will be called periodically to compute the centreline and desired heading based on the latest LiDAR and lane detection data. It will then publish the appropriate cmd_vel to navigate towards the goal.
         
         self.get_logger().info('Running lane_timer_callback to compute centreline and desired heading. Checking check_lines_sign: ' + str(self.check_lines_sign(self.get_line_lane_equation(self.left_lane), self.get_line_lane_equation(self.right_lane))))
 
-        
+        lane_width_status = self.check_measured_lane_width(self.get_line_lane_equation(self.left_lane), self.get_line_lane_equation(self.right_lane))
+        self.get_logger().info(f"Measured lane width status: {lane_width_status}")
 
         left_eq = self.get_line_lane_equation(self.left_lane)
         right_eq = self.get_line_lane_equation(self.right_lane)

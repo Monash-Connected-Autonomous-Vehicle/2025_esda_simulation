@@ -184,35 +184,33 @@ class TrackFollower(Node):
 
         lookahead_z = 1.5
 
-        left_x = left_eq[0] * lookahead_z + left_eq[1] if left_eq else None
-        right_x = right_eq[0] * lookahead_z + right_eq[1] if right_eq else None
+        # left_x = left_eq[0] * lookahead_z + left_eq[1] if left_eq else None
+        # right_x = right_eq[0] * lookahead_z + right_eq[1] if right_eq else None
 
-        if direction == "forward":
-            rec.reason = "both_lanes_forward"
-            rec.linear_x = 0.5
-            rec.angular_z = 0.0
+        # if direction == "forward":
+        #     rec.reason = "both_lanes_forward"
+        #     rec.linear_x = 0.5
+        #     rec.angular_z = 0.0
 
-        elif direction == "left":
-            rec.reason = "both_lanes_suggest_left"
-            rec.linear_x = 0.18
-            # Turn more left when the left lane is getting too close
-            closeness = max(0.0, 1.2 - abs(left_x))
-            angular = 0.12 + 0.7 * closeness
-            rec.angular_z = max(min(angular, 0.45), 0.12)
+        # elif direction == "left":
+        #     rec.reason = "both_lanes_suggest_left"
+        #     rec.linear_x = 0.18
+        #     # Turn more left when the left lane is getting too close
+        #     closeness = max(0.0, 1.2 - abs(left_x))
+        #     angular = 0.12 + 0.7 * closeness
+        #     rec.angular_z = max(min(angular, 0.45), 0.12)
 
+        # elif direction == "right":
+        #     rec.reason = "both_lanes_suggest_right"
+        #     rec.linear_x = 0.18
+        #     # Turn more right when the right lane is getting too close# Turn more right when the right lane is getting too close
+        #     closeness = max(0.0, 1.2 - abs(right_x))
+        #     angular = -(0.12 + 0.4 * closeness)
+        #     rec.angular_z = min(max(angular, -0.45), -0.12)
 
-        elif direction == "right":
-            rec.reason = "both_lanes_suggest_right"
-            rec.linear_x = 0.18
-            # Turn more right when the right lane is getting too close# Turn more right when the right lane is getting too close
-            closeness = max(0.0, 1.2 - abs(right_x))
-            angular = -(0.12 + 0.4 * closeness)
-            rec.angular_z = min(max(angular, -0.45), -0.12)
-
-        elif left_eq is not None and right_eq is None:
+        if left_eq is not None and right_eq is None:
             # Only left lane visible.
             # Stay away from left lane, bias slightly right.
-            lookahead_z = 1.5
             left_x = left_eq[0] * lookahead_z + left_eq[1]
 
             desired_left_distance = 1.2
@@ -225,7 +223,6 @@ class TrackFollower(Node):
         elif right_eq is not None and left_eq is None:
             # Only right lane visible.
             # Stay away from right lane, bias slightly left.
-            lookahead_z = 1.5
             right_x = right_eq[0] * lookahead_z + right_eq[1]
 
             desired_right_distance = -1.2   # tune this

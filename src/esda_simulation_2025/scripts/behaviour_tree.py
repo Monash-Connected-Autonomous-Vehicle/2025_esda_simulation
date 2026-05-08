@@ -38,9 +38,10 @@ from esda_simulation_2025.msg import NavigationRecommendation
 # Define an enumeration for the different navigation states of the robot. This will help us manage the different navigation strategies in a clear and organized way, allowing us to easily switch between them based on the current state of the robot and the environment.
 class NavigationState(Enum):
     CENTRELINE_FOLLOWING = 1
-    FOLLOW_THE_GAP = 2
-    GOAL_NAVIGATION = 3
-    RECOVERY = 4  # Added a recovery state for handling situations where the robot is stuck or encounters an unexpected situation
+    CENTRELINE_FOLLOWING_HEADING_CORRECTION = 2 
+    FOLLOW_THE_GAP = 3
+    GOAL_NAVIGATION = 4
+    RECOVERY = 5  # Added a recovery state for handling situations where the robot is stuck or encounters an unexpected situation
 
 
 class BehaviourTree(Node):
@@ -196,6 +197,7 @@ class BehaviourTree(Node):
         elif self.current_state == NavigationState.GOAL_NAVIGATION:
             # Implement logic for goal navigation strategy
             pass
+
         elif self.current_state == NavigationState.RECOVERY:
             self.get_logger().info('In recovery state, attempting to get unstuck or handle unexpected situation')
             # Implement logic for recovery strategy to handle situations where the robot is stuck or encounters an unexpected situation

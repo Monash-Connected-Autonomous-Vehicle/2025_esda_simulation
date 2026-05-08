@@ -136,6 +136,7 @@ class TrackFollower(Node):
             return 'right'
         
     def check_measured_lane_width(self, left_line_eq, right_line_eq, lookahead_z=1.5):
+        # IMPORTANT: SINCE THIS TAKES INTO ACCOUNT IMPERFECT LANES
         # Implement logic to check the measured lane width based on the left and right line equations at a certain lookahead distance (lookahead_z) to determine if it is consistent with the expected track width. This can be used to assist in determining the track direction and to assist in switching between different navigation strategies based on the distance to the goal.
         if left_line_eq is None or right_line_eq is None:
             return None  # Cannot check lane width without both line equations

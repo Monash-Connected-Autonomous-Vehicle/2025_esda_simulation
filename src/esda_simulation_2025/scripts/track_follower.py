@@ -189,6 +189,42 @@ class TrackFollower(Node):
 
         return width_status, direction
 
+    def classify_lane_evidence_from_points(self, lookahead_z=1.5):
+        points = self.left_lane + self.right_lane
+
+        if len(points) == 0:
+            return "no_lanes", None
+
+        # Only look at points near the lookahead distance
+        nearby = [
+            p for p in points
+            if abs(p[2] - lookahead_z) < 0.7
+        ]
+
+        if len(nearby) == 0:
+            nearby = points
+
+        xs = [p[0] for p in nearby]
+
+        left_count = sum(1 for x in xs if x < -0.2)
+        right_count = sum(1 for x in xs if x > 0.2)
+
+        if right_count > left_count:
+            side = "lane_evidence_right"
+        elif left_count > right_count:
+            side = "lane_evidence_left"
+        else:
+            side = "lane_evidence_center"
+
+        self.get_logger().info(
+            f"raw evidence xs: left_count={left_count}, "
+            f"right_count={right_count}, side={side}"
+        )
+
+        return "lane_evidence_from_points", side
+
+    
+
     def lane_timer_callback(self):
         # This timer callback will be called periodically to compute the centreline and desired heading based on the latest LiDAR and lane detection data. It will then publish the appropriate cmd_vel to navigate towards the goal.
         lookahead_z = 1.5
@@ -217,12 +253,32 @@ class TrackFollower(Node):
         # Case 1: both lanes visible
         if left_eq is not None and right_eq is not None:
 
-            if not self.valid_lane_pair(left_eq, right_eq, lookahead_z):
-                rec.reason = "invalid_lane_pair"
-                rec.valid = False
-                rec.confidence = 0.2
-                rec.linear_x = 0.0
-                rec.angular_z = 0.0
+            lane_pair_status, lane_evidence_side = self.classify_lane_evidence_from_points(
+                # left_eq,
+                # right_eq,
+                lookahead_z
+            )
+
+            self.get_logger().info(
+                f"lane_pair_status={lane_pair_status}, "
+                f"lane_evidence_side={lane_evidence_side}"
+            )
+
+            if lane_pair_status != "valid_pair":
+                _, lane_evidence_side = self.classify_lane_evidence_from_points(lookahead_z)
+
+                rec.reason = f"{lane_pair_status}_{lane_evidence_side}"
+                rec.valid = True
+                rec.confidence = 0.3
+                rec.linear_x = 0.08
+
+                if lane_evidence_side == "lane_evidence_right":
+                    rec.angular_z = 0.15   # steer left away from right line
+                elif lane_evidence_side == "lane_evidence_left":
+                    rec.angular_z = -0.15  # steer right away from left line
+                else:
+                    rec.angular_z = 0.0
+
                 self.behaviour_tree_publisher.publish(rec)
                 return
 

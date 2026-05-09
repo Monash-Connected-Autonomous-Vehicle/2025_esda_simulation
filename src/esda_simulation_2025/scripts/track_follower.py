@@ -173,7 +173,7 @@ class TrackFollower(Node):
         centre_x = (left_x + right_x) / 2.0
         desired_centre_x = 0.0  # Assuming we want to be in the centre of the track, which is at x = 0.0 in our coordinate system. This
 
-        if measured_lane_width < self.track_width * 0.7:
+        if measured_lane_width < self.track_width * 0.6:
             width_status = 'too_narrow'
         elif measured_lane_width > self.track_width * 1.3:
             width_status = 'too_wide'
@@ -190,72 +190,51 @@ class TrackFollower(Node):
         return width_status, direction
 
     def classify_lane_evidence_from_points(self, left_eq, right_eq, lookahead_z=1.5):
-        # First try using the fitted lane equations.
-        # This is more stable than raw point counting.
-        if left_eq is not None and right_eq is not None:
+        if left_eq is None and right_eq is None:
+            return "no_lanes", None
 
+        if left_eq is not None and right_eq is not None:
             left_x = left_eq[0] * lookahead_z + left_eq[1]
             right_x = right_eq[0] * lookahead_z + right_eq[1]
-
             width = abs(right_x - left_x)
 
             self.get_logger().info(
-                f"lane evidence from equations: "
-                f"left_x={left_x:.2f}, right_x={right_x:.2f}, width={width:.2f}"
+                f"lane evidence: left_x={left_x:.2f}, right_x={right_x:.2f}, width={width:.2f}"
             )
 
-            # Both lanes appear on opposite sides of robot
-            if left_x < -0.15 and right_x > 0.15:
-                side = "lane_evidence_center"
+            # Real usable lane pair
+            if width >= 0.8 and left_x < -0.15 and right_x > 0.15:
+                return "valid_pair", "lane_evidence_center"
 
-            # Both detected lanes are on robot's right side
-            elif left_x > 0.15 and right_x > 0.15:
-                side = "lane_evidence_right"
+            # Too narrow = probably same-side fragments
+            if width < 0.8:
+                if right_x > 0.15:
+                    return "invalid_or_single_side", "lane_evidence_right"
+                elif left_x < -0.15:
+                    return "invalid_or_single_side", "lane_evidence_left"
+                else:
+                    return "invalid_or_single_side", "lane_evidence_unclear"
 
-            # Both detected lanes are on robot's left side
+            # Both lines on same side
+            if left_x > 0.15 and right_x > 0.15:
+                return "invalid_or_single_side", "lane_evidence_right"
             elif left_x < -0.15 and right_x < -0.15:
-                side = "lane_evidence_left"
+                return "invalid_or_single_side", "lane_evidence_left"
 
-            # Ambiguous geometry
-            else:
-                side = "lane_evidence_unclear"
+            return "invalid_or_single_side", "lane_evidence_unclear"
 
-            return "lane_evidence_from_equations", side
-
-        # Fallback to raw point distribution if only partial lanes exist
-        points = self.left_lane + self.right_lane
-
-        if len(points) == 0:
-            return "no_lanes", None
-
-        nearby = [
-            p for p in points
-            if abs(p[2] - lookahead_z) < 0.7
-        ]
-
-        if len(nearby) == 0:
-            nearby = points
-
-        xs = [p[0] for p in nearby]
-
-        left_count = sum(1 for x in xs if x < -0.15)
-        right_count = sum(1 for x in xs if x > 0.15)
-
-        self.get_logger().info(
-            f"raw evidence fallback: "
-            f"left_count={left_count}, right_count={right_count}"
-        )
-
-        if left_count >= 5 and right_count >= 5:
-            side = "lane_evidence_center"
-        elif right_count >= 5:
-            side = "lane_evidence_right"
-        elif left_count >= 5:
-            side = "lane_evidence_left"
+        # Only one lane equation exists
+        if left_eq is not None:
+            x = left_eq[0] * lookahead_z + left_eq[1]
         else:
-            side = "lane_evidence_unclear"
+            x = right_eq[0] * lookahead_z + right_eq[1]
 
-        return "lane_evidence_from_points", side
+        if x > 0.15:
+            return "invalid_or_single_side", "lane_evidence_right"
+        elif x < -0.15:
+            return "invalid_or_single_side", "lane_evidence_left"
+        else:
+            return "invalid_or_single_side", "lane_evidence_unclear"
 
     
 
@@ -288,8 +267,8 @@ class TrackFollower(Node):
         if left_eq is not None and right_eq is not None:
 
             lane_pair_status, lane_evidence_side = self.classify_lane_evidence_from_points(
-                # left_eq,
-                # right_eq,
+                left_eq,
+                right_eq,
                 lookahead_z
             )
 
@@ -298,8 +277,11 @@ class TrackFollower(Node):
                 f"lane_evidence_side={lane_evidence_side}"
             )
 
+            if lane_evidence_side == "lane_evidence_unclear":
+                pass
+
             if lane_pair_status != "valid_pair":
-                _, lane_evidence_side = self.classify_lane_evidence_from_points(lookahead_z)
+                _, lane_evidence_side = self.classify_lane_evidence_from_points(left_eq, right_eq, lookahead_z)
 
                 rec.reason = f"{lane_pair_status}_{lane_evidence_side}"
                 rec.valid = True
@@ -390,76 +372,6 @@ class TrackFollower(Node):
 
         self.behaviour_tree_publisher.publish(rec)
 
-        # Currently disabled this algorithm
-        if self.temp_lane_timer_cb_test:
-            # No centre line if we don't have both left and right lane points, so we can't compute a desired heading or navigate towards the goal without a centreline to follow. We will need to wait until we have both left and right lane points before we can compute the centreline and desired heading.
-            if not self.left_lane or not self.right_lane:
-                return
-            
-            centreline = self.compute_centreline()
-
-            if not centreline:
-                return
-            
-            desired_offset = self.track_width / 2.0  # Desired offset from the centreline to follow, this can be adjusted based on the desired position of the robot on the track (e.g. closer to the left or right lane). For now, we will aim to follow the centreline, so the desired offset is half the track width.
-            
-            # Need enough centreline points
-            if len(centreline) < 2:
-                return
-
-            # Smooth direction tracking
-            start_idx = min(5, len(centreline) - 2)
-            end_idx = min(10, len(centreline) - 1)
-
-            dx_total = 0.0
-            dz_total = 0.0
-            count = 0
-
-            for i in range(start_idx, end_idx):
-                x1, y1, z1 = centreline[i]
-                x2, y2, z2 = centreline[i + 1]
-
-                dx_total += (x2 - x1)
-                dz_total += (z2 - z1)
-                count += 1
-
-            if count == 0:
-                return
-
-            desired_heading = math.atan2(dx_total, dz_total)
-
-            # Small correction toward centreline position
-            target_idx = min(8, len(centreline) - 1)
-            target_x, _, target_z = centreline[target_idx]
-
-            position_error = math.atan2(target_x, target_z)
-
-            # Blend both
-            steering_error = desired_heading + 0.5 * position_error
-
-            if self.test_track_follower_itself:
-                cmd = Twist()
-                cmd.linear.x = 0.5  # Set a constant forward speed, this can be adjusted based on the distance to the target or other factors
-                cmd.angular.z = -1.0 * steering_error  # Proportional control for steering based on the error to the target
-                
-
-                self.cmd_vel_pub.publish(cmd)
-
-            else:
-                # Sends behaviour_tree the computed centreline and desired heading to assist in determining the track direction and goal location, and to assist in switching between different navigation strategies based on the distance to the goal. The behaviour tree will then use this information to determine which navigation strategy to use (e.g. follow the gap, goal navigation, etc.) and to compute the appropriate cmd_vel to publish to navigate towards the goal.
-                
-                navigation_recommendation = NavigationRecommendation()
-                navigation_recommendation.source = 'track_follower'
-                navigation_recommendation.valid = True
-                navigation_recommendation.reason = 'centreline_computed'
-                navigation_recommendation.linear_x = 0.5  # This can be adjusted based on the distance to the target or other factors
-                navigation_recommendation.angular_z = -1.0 * steering_error  # Proportional control for steering based on the error to the target
-                self.behaviour_tree_publisher.publish(navigation_recommendation)
-
-            
-            # print(f"The centreline points are: {centreline}")
-            # print(f"Computed centreline with {len(centreline)} points.")
-            # Here we would also compute the desired heading based on the centreline and LiDAR data, and then publish the cmd_vel to navigate towards the goal. This is where we would implement the logic to switch to a different navigation strategy when we are within a certain distance to the goal.
 
     def lidar_listener_callback(self, msg):
         # Access LiDAR data from the LaserScan message
@@ -548,32 +460,6 @@ class TrackFollower(Node):
             ))
 
         return centreline
-
-    def compute_desired_heading(self, scan_data):
-        # Implement logic to compute the desired heading based on LiDAR data and lane detection
-        # This could involve analyzing the gaps in the LiDAR data and the lane markers to determine the best direction to follow
-
-        pass
-
-    def get_track_direction(self, scan_data):
-        # Implement logic to determine the track direction based on LiDAR data
-
-        pass
-
-
-
-
-    def navigate_to_goal(self):
-        # Implement navigation logic to move towards the current goal
-        pass
-
-    def get_line_equation(self):
-        # Implement logic to compute the line equation for the track direction based on lane detection and LiDAR data. This can be used to assist in determining the track direction and to assist in switching between different navigation strategies based on the distance to the goal.
-
-        pass
-
-    
-
 
 def main(args=None):
     rclpy.init(args=args)

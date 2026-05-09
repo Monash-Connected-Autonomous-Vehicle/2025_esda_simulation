@@ -189,13 +189,45 @@ class TrackFollower(Node):
 
         return width_status, direction
 
-    def classify_lane_evidence_from_points(self, lookahead_z=1.5):
+    def classify_lane_evidence_from_points(self, left_eq, right_eq, lookahead_z=1.5):
+        # First try using the fitted lane equations.
+        # This is more stable than raw point counting.
+        if left_eq is not None and right_eq is not None:
+
+            left_x = left_eq[0] * lookahead_z + left_eq[1]
+            right_x = right_eq[0] * lookahead_z + right_eq[1]
+
+            width = abs(right_x - left_x)
+
+            self.get_logger().info(
+                f"lane evidence from equations: "
+                f"left_x={left_x:.2f}, right_x={right_x:.2f}, width={width:.2f}"
+            )
+
+            # Both lanes appear on opposite sides of robot
+            if left_x < -0.15 and right_x > 0.15:
+                side = "lane_evidence_center"
+
+            # Both detected lanes are on robot's right side
+            elif left_x > 0.15 and right_x > 0.15:
+                side = "lane_evidence_right"
+
+            # Both detected lanes are on robot's left side
+            elif left_x < -0.15 and right_x < -0.15:
+                side = "lane_evidence_left"
+
+            # Ambiguous geometry
+            else:
+                side = "lane_evidence_unclear"
+
+            return "lane_evidence_from_equations", side
+
+        # Fallback to raw point distribution if only partial lanes exist
         points = self.left_lane + self.right_lane
 
         if len(points) == 0:
             return "no_lanes", None
 
-        # Only look at points near the lookahead distance
         nearby = [
             p for p in points
             if abs(p[2] - lookahead_z) < 0.7
@@ -206,20 +238,22 @@ class TrackFollower(Node):
 
         xs = [p[0] for p in nearby]
 
-        left_count = sum(1 for x in xs if x < -0.2)
-        right_count = sum(1 for x in xs if x > 0.2)
-
-        if right_count > left_count:
-            side = "lane_evidence_right"
-        elif left_count > right_count:
-            side = "lane_evidence_left"
-        else:
-            side = "lane_evidence_center"
+        left_count = sum(1 for x in xs if x < -0.15)
+        right_count = sum(1 for x in xs if x > 0.15)
 
         self.get_logger().info(
-            f"raw evidence xs: left_count={left_count}, "
-            f"right_count={right_count}, side={side}"
+            f"raw evidence fallback: "
+            f"left_count={left_count}, right_count={right_count}"
         )
+
+        if left_count >= 5 and right_count >= 5:
+            side = "lane_evidence_center"
+        elif right_count >= 5:
+            side = "lane_evidence_right"
+        elif left_count >= 5:
+            side = "lane_evidence_left"
+        else:
+            side = "lane_evidence_unclear"
 
         return "lane_evidence_from_points", side
 

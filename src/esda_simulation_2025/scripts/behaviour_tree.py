@@ -136,9 +136,14 @@ class BehaviourTree(Node):
             # self.latest_track_recommendation_msg
             self.get_logger().info('Current state: CENTRELINE_FOLLOWING')
             
+            # Gets the track_follower data:
+            if self.latest_track_recommendation_msg is not None:
+                self.get_logger().info(f'<DEBUG LINE 141> Latest Track Follower recommendation: valid={self.latest_track_recommendation_msg.valid}, reason={self.latest_track_recommendation_msg.reason}, linear_x={self.latest_track_recommendation_msg.linear_x:.2f}, angular_z={self.latest_track_recommendation_msg.angular_z:.2f}')
+            
             # Debugging: Log the latest track follower recommendation message to see if it is valid and what the recommended linear and angular velocities are. This will help us understand how the track follower node is influencing our navigation strategy in the centreline following state.
             self.destroy_node()
             
+
             # Use the suggestions of the track_follower node
             if self.latest_follow_the_gap_recommendation_msg is not None and self.latest_follow_the_gap_recommendation_msg.valid and self.latest_follow_the_gap_recommendation_msg.reason == 'path_blocked':
                 self.get_logger().info('Follow The Gap recommendation is valid, switching to Follow The Gap state ===================================================================================================================================================================')
@@ -147,7 +152,7 @@ class BehaviourTree(Node):
             
             # Get the message from the track follower node and check if it is still valid based on the timestamp. If it is valid, we can use the recommended linear and angular velocities from the track follower node to control the robot's movement in the centreline following state. If the message is too old, we may choose to switch to a different navigation strategy or enter a recovery state to handle the situation appropriately.
             if self.latest_track_recommendation_msg is not None:
-                self.get_logger().info(f'Latest Track Follower recommendation: valid={self.latest_track_recommendation_msg.valid}, reason={self.latest_track_recommendation_msg.reason}, linear_x={self.latest_track_recommendation_msg.linear_x:.2f}, angular_z={self.latest_track_recommendation_msg.angular_z:.2f}')
+                self.get_logger().info(f'<DEBUG LINE 155> Latest Track Follower recommendation: valid={self.latest_track_recommendation_msg.valid}, reason={self.latest_track_recommendation_msg.reason}, linear_x={self.latest_track_recommendation_msg.linear_x:.2f}, angular_z={self.latest_track_recommendation_msg.angular_z:.2f}')
 
                 twist_cmd_msg = Twist()
                 twist_cmd_msg.linear.x = self.latest_track_recommendation_msg.linear_x

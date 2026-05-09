@@ -56,7 +56,7 @@ class TrackFollower(Node):
         self.current_goal = None  # Placeholder for the current goal position
 
         
-        self.track_width = 2.3 # Assume a 4 metre track width for computing the centreline from the lane detection data, this can be adjusted based on the actual track width in the simulation or real world environment.
+        self.track_width = 1.7 # Assume a 4 metre track width for computing the centreline from the lane detection data, this can be adjusted based on the actual track width in the simulation or real world environment.
         self.one_lane_threshold_factor = 1.2  # Threshold for determining if we only see one lane, this can be adjusted based on the expected distance between the lanes and the noise in the lane detection data. If the average x position of the detected lane points is within this threshold from the desired offset, we can consider that we only see one lane and adjust our control strategy accordingly.
 
         self.temp_lane_timer_cb_test = False  # Temporary variable to control whether to run the lane_timer_callback for testing purposes, this can be removed once we have the lane_timer_callback fully implemented and tested.
@@ -97,6 +97,28 @@ class TrackFollower(Node):
         self.timer = self.create_timer(0.1, self.lane_timer_callback)
 
         print("Track Follower node initialized and subscribed to LiDAR and lane detection topics.")
+
+    def valid_lane_pair(self, left_eq, right_eq, lookahead_z=1.5):
+        if left_eq is None or right_eq is None:
+            return False
+
+        left_x = left_eq[0] * lookahead_z + left_eq[1]
+        right_x = right_eq[0] * lookahead_z + right_eq[1]
+
+        measured_width = abs(right_x - left_x)
+
+        # Left lane should be left of robot, right lane should be right of robot
+        if left_x > -0.15:
+            return False
+
+        if right_x < 0.15:
+            return False
+
+        # Lane pair should have reasonable separation
+        if measured_width < 0.8:
+            return False
+
+        return True
 
     def get_line_lane_equation(self, lane_points):
         # Implement logic to compute the line equation for a lane based on the detected lane points. This can be used to assist in determining the track direction and to assist in switching between different navigation strategies based on the distance to the goal.
@@ -148,23 +170,36 @@ class TrackFollower(Node):
 
         self.get_logger().info(f"\nMeasured lane width at lookahead distance {lookahead_z}: {measured_lane_width:.2f} (Left x: {left_x:.2f}, Right x: {right_x:.2f})\n")
 
-        if measured_lane_width < self.track_width * 0.5:
-            return 'too_narrow'
-        elif measured_lane_width > self.track_width * 1.5:
-            return 'too_wide'
+        centre_x = (left_x + right_x) / 2.0
+        desired_centre_x = 0.0  # Assuming we want to be in the centre of the track, which is at x = 0.0 in our coordinate system. This
+
+        if measured_lane_width < self.track_width * 0.7:
+            width_status = 'too_narrow'
+        elif measured_lane_width > self.track_width * 1.3:
+            width_status = 'too_wide'
         else:
-            return 'normal'
+            width_status = 'normal'
+
+        if centre_x > 0.2:
+            direction = 'lanes_shifted_right'
+        elif centre_x < -0.2:
+            direction = 'lanes_shifted_left'
+        else:
+            direction = 'lanes_centered'
+
+        return width_status, direction
 
     def lane_timer_callback(self):
         # This timer callback will be called periodically to compute the centreline and desired heading based on the latest LiDAR and lane detection data. It will then publish the appropriate cmd_vel to navigate towards the goal.
-        
-        self.get_logger().info('Running lane_timer_callback to compute centreline and desired heading. Checking check_lines_sign: ' + str(self.check_lines_sign(self.get_line_lane_equation(self.left_lane), self.get_line_lane_equation(self.right_lane))))
-
-        lane_width_status = self.check_measured_lane_width(self.get_line_lane_equation(self.left_lane), self.get_line_lane_equation(self.right_lane))
-        self.get_logger().info(f"Measured lane width status: {lane_width_status}")
+        lookahead_z = 1.5
 
         left_eq = self.get_line_lane_equation(self.left_lane)
         right_eq = self.get_line_lane_equation(self.right_lane)
+
+        self.get_logger().info(
+            f"Running lane_timer_callback. left_eq={left_eq}, right_eq={right_eq}, "
+            f"check_lines_sign={self.check_lines_sign(left_eq, right_eq)}"
+        )
 
         lane_msg = LaneParameters()
         lane_msg.left_lane_gradient = left_eq[0] if left_eq else 0.0
@@ -177,67 +212,91 @@ class TrackFollower(Node):
         rec = NavigationRecommendation()
         rec.source = "track_follower"
         rec.valid = True
+        rec.confidence = lane_msg.confidence
 
-        direction = self.check_lines_sign(left_eq, right_eq)
+        # Case 1: both lanes visible
+        if left_eq is not None and right_eq is not None:
 
-        self.get_logger().info(f"%%%%%%%%%%%%%%Determined track direction: {direction} based on line equations. Left line eq: {left_eq}, Right line eq: {right_eq}")
+            if not self.valid_lane_pair(left_eq, right_eq, lookahead_z):
+                rec.reason = "invalid_lane_pair"
+                rec.valid = False
+                rec.confidence = 0.2
+                rec.linear_x = 0.0
+                rec.angular_z = 0.0
+                self.behaviour_tree_publisher.publish(rec)
+                return
 
-        lookahead_z = 1.5
+            width_status, lane_direction = self.check_measured_lane_width(
+                left_eq, right_eq, lookahead_z
+            )
 
-        # left_x = left_eq[0] * lookahead_z + left_eq[1] if left_eq else None
-        # right_x = right_eq[0] * lookahead_z + right_eq[1] if right_eq else None
+            left_x = left_eq[0] * lookahead_z + left_eq[1]
+            right_x = right_eq[0] * lookahead_z + right_eq[1]
+            centre_x = (left_x + right_x) / 2.0
 
-        # if direction == "forward":
-        #     rec.reason = "both_lanes_forward"
-        #     rec.linear_x = 0.5
-        #     rec.angular_z = 0.0
+            rec.linear_x = 0.18
 
-        # elif direction == "left":
-        #     rec.reason = "both_lanes_suggest_left"
-        #     rec.linear_x = 0.18
-        #     # Turn more left when the left lane is getting too close
-        #     closeness = max(0.0, 1.2 - abs(left_x))
-        #     angular = 0.12 + 0.7 * closeness
-        #     rec.angular_z = max(min(angular, 0.45), 0.12)
+            # IMPORTANT:
+            # centre_x < 0 means lane centre is left of robot,
+            # so turn left: positive angular_z.
+            centre_error = -centre_x
 
-        # elif direction == "right":
-        #     rec.reason = "both_lanes_suggest_right"
-        #     rec.linear_x = 0.18
-        #     # Turn more right when the right lane is getting too close# Turn more right when the right lane is getting too close
-        #     closeness = max(0.0, 1.2 - abs(right_x))
-        #     angular = -(0.12 + 0.4 * closeness)
-        #     rec.angular_z = min(max(angular, -0.45), -0.12)
+            if width_status == "normal":
+                rec.reason = f"both_lanes_normal_{lane_direction}"
+                rec.angular_z = max(min(0.6 * centre_error, 0.3), -0.3)
 
-        if left_eq is not None and right_eq is None:
-            # Only left lane visible.
-            # Stay away from left lane, bias slightly right.
+            elif width_status == "too_narrow":
+                rec.reason = f"both_lanes_too_narrow_{lane_direction}"
+                rec.linear_x = 0.10
+
+                if lane_direction == "lanes_shifted_left":
+                    rec.angular_z = 0.18      # steer left
+                elif lane_direction == "lanes_shifted_right":
+                    rec.angular_z = -0.18     # steer right
+                else:
+                    rec.angular_z = max(min(0.4 * centre_error, 0.2), -0.2)
+
+            elif width_status == "too_wide":
+                rec.reason = f"both_lanes_too_wide_{lane_direction}"
+                rec.confidence = 0.4
+                rec.linear_x = 0.08
+                rec.angular_z = max(min(0.4 * centre_error, 0.2), -0.2)
+
+        # Case 2: only left lane visible
+        elif left_eq is not None:
             left_x = left_eq[0] * lookahead_z + left_eq[1]
 
-            desired_left_distance = 1.2
-            distance_error = desired_left_distance - left_x
+            desired_left_x = -self.track_width / 2.0
+            error = desired_left_x - left_x
 
             rec.reason = "only_left_lane_visible"
-            rec.linear_x = 0.18
-            rec.angular_z = max(min(-0.35 * distance_error, 0.25), -0.25)
+            rec.linear_x = 0.12
+            rec.angular_z = max(min(-0.4 * error, 0.25), -0.25)
 
-        elif right_eq is not None and left_eq is None:
-            # Only right lane visible.
-            # Stay away from right lane, bias slightly left.
+        # Case 3: only right lane visible
+        elif right_eq is not None:
             right_x = right_eq[0] * lookahead_z + right_eq[1]
 
-            desired_right_distance = -1.2   # tune this
-            distance_error = desired_right_distance - right_x
+            desired_right_x = self.track_width / 2.0
+            error = desired_right_x - right_x
 
             rec.reason = "only_right_lane_visible"
             rec.linear_x = 0.12
-            rec.angular_z = max(min(0.35 * distance_error, 0.25), -0.25)
+            rec.angular_z = max(min(-0.4 * error, 0.25), -0.25)
 
+        # Case 4: no lanes visible
         else:
-            # No lane info. Let FTG/behaviour tree take over.
             rec.reason = "no_lanes_visible"
             rec.valid = False
+            rec.confidence = 0.0
             rec.linear_x = 0.0
             rec.angular_z = 0.0
+
+        self.get_logger().info(
+            f"Track follower rec: reason={rec.reason}, "
+            f"linear_x={rec.linear_x:.2f}, angular_z={rec.angular_z:.2f}, "
+            f"confidence={rec.confidence:.2f}, valid={rec.valid}"
+        )
 
         self.behaviour_tree_publisher.publish(rec)
 
@@ -253,27 +312,6 @@ class TrackFollower(Node):
                 return
             
             desired_offset = self.track_width / 2.0  # Desired offset from the centreline to follow, this can be adjusted based on the desired position of the robot on the track (e.g. closer to the left or right lane). For now, we will aim to follow the centreline, so the desired offset is half the track width.
-            # print(f"self.left_lane: {self.left_lane}")
-            # print(f"self.right_lane: {self.right_lane}")
-
-            # Check if we only see one of the lanes
-            # if len(self.left_lane) > len(self.right_lane) * self.one_lane_threshold_factor:
-            #     print("Only left lane detected, cannot compute centreline.")
-            #     avg_x = np.mean([point[0] for point in self.left_lane])
-
-            #     error = desired_offset - abs(avg_x)  # Compute the error based on the average x position of the detected lane points and the desired offset from the centreline. This is a simple proportional control approach where we compute the error as the difference between the desired offset and the actual offset based on the detected lane points, and we can use this error to compute a steering command to try to maintain the desired offset from the lane. We can adjust this to include a more sophisticated control approach if needed, such as a PID controller or a pure pursuit controller.
-
-            #     steering = self.K_steering * error  # Compute the steering command based on the error and the steering gain. This will determine how aggressively the robot tries to correct its position based on the detected lane points.
-            #     print(f"{steering=:.2f}, {error=:.2f}, {avg_x=:.2f}")
-            #     return
-            # elif len(self.right_lane) > len(self.left_lane) * self.one_lane_threshold_factor:
-            #     print("Only right lane detected, cannot compute centreline.")
-            #     avg_x = np.mean([point[0] for point in self.right_lane])
-            #     error = desired_offset - abs(avg_x)  # Compute the error based on the average x position of the detected lane points and the desired offset from the centreline.
-
-            #     steering = self.K_steering * error  # Compute the steering command based on the error and the steering gain.
-            #     print(f"{steering=:.2f}, {error=:.2f}, {avg_x=:.2f}")
-            #     return
             
             # Need enough centreline points
             if len(centreline) < 2:

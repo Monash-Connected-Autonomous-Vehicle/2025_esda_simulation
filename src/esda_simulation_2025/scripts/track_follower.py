@@ -60,6 +60,8 @@ class TrackFollower(Node):
         self.one_lane_threshold_factor = 1.2  # Threshold for determining if we only see one lane, this can be adjusted based on the expected distance between the lanes and the noise in the lane detection data. If the average x position of the detected lane points is within this threshold from the desired offset, we can consider that we only see one lane and adjust our control strategy accordingly.
 
         self.temp_lane_timer_cb_test = False  # Temporary variable to control whether to run the lane_timer_callback for testing purposes, this can be removed once we have the lane_timer_callback fully implemented and tested.
+    
+        self.last_angular_z = 0.0  # Variable to store the last angular velocity command, this can be used to implement smoothing or rate limiting of the angular velocity commands if needed. Used for when we are unclear of the lane evidence, we can choose to maintain our last angular velocity command to try to keep a consistent heading rather than making sudden changes in direction based on uncertain lane evidence.
 
         self.left_lane = []
         self.right_lane = []
@@ -116,6 +118,10 @@ class TrackFollower(Node):
 
         # Lane pair should have reasonable separation
         if measured_width < 0.8:
+            return False
+        
+        # Reject both if thee gradients have the wrong signs (e.g. both positive or both negative), as this is unlikely to be a valid lane pair and may indicate that we are seeing two fragments of the same lane rather than two separate lanes. By checking the signs of the gradients of the left and right lane equations, we can filter out cases where both lanes have the same sign, which is unlikely to be a valid lane pair and may indicate that we are seeing two fragments of the same lane rather than two separate lanes. This can help us improve the robustness of our lane detection and tracking by ensuring that we are only considering valid lane pairs that are likely to represent the actual left and right lanes of the track.
+        if not (left_eq[0] < 0.0 and right_eq[0] > 0.0):
             return False
 
         return True
@@ -203,7 +209,7 @@ class TrackFollower(Node):
             )
 
             # Real usable lane pair
-            if width >= 0.8 and left_x < -0.15 and right_x > 0.15:
+            if width >= 0.8 and left_x < -0.15 and right_x > 0.15 and left_eq[0] < 0.0 and right_eq[0] > 0.0:
                 return "valid_pair", "lane_evidence_center"
 
             # Too narrow = probably same-side fragments
@@ -282,18 +288,22 @@ class TrackFollower(Node):
             if lane_pair_status != "valid_pair":
 
                 _, lane_evidence_side = self.classify_lane_evidence_from_points(left_eq, right_eq, lookahead_z)
-                
+
                 rec.reason = f"{lane_pair_status}_{lane_evidence_side}"
                 rec.valid = True
                 rec.confidence = 0.3
                 rec.linear_x = 0.08
 
                 if lane_evidence_side == "lane_evidence_right":
-                    rec.angular_z = 0.15   # steer left away from right line
+                    rec.angular_z = 0.25   # steer left away from right line
+                    self.last_angular_z = rec.angular_z  # Update last angular velocity command when we have some lane evidence to steer away from right line
                 elif lane_evidence_side == "lane_evidence_left":
-                    rec.angular_z = -0.15  # steer right away from left line
-                else:
-                    rec.angular_z = 0.0
+                    rec.angular_z = -0.25  # steer right away from left line
+                    self.last_angular_z = rec.angular_z  # Update last angular velocity command when we have some lane evidence to steer away from left line
+                else: # When lane_evidence_side = "lane_evidence_unclear", we will just steer based on the centre error but with reduced confidence and speed since we are not sure about the lane evidence
+                    # rec.linear_x = 0.05
+                    # rec.angular_z = 0.5 * self.last_angular_z  # maintain last angular velocity command to try to keep a consistent heading rather than making sudden changes in direction based on uncertain lane evidence
+                    rec.angular_z = 0.0  # steer based on centre error but with reduced gain since we are not sure about the lane evidence
 
                 self.behaviour_tree_publisher.publish(rec)
                 return

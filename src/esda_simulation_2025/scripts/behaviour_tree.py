@@ -141,7 +141,7 @@ class BehaviourTree(Node):
                 self.get_logger().info(f'<DEBUG LINE 141> Latest Track Follower recommendation: valid={self.latest_track_recommendation_msg.valid}, reason={self.latest_track_recommendation_msg.reason}, linear_x={self.latest_track_recommendation_msg.linear_x:.2f}, angular_z={self.latest_track_recommendation_msg.angular_z:.2f}')
             
             # Debugging: Log the latest track follower recommendation message to see if it is valid and what the recommended linear and angular velocities are. This will help us understand how the track follower node is influencing our navigation strategy in the centreline following state.
-            self.destroy_node()
+            # self.destroy_node()
             
 
             # Use the suggestions of the track_follower node

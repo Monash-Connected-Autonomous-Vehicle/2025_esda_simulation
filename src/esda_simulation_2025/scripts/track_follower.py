@@ -277,12 +277,12 @@ class TrackFollower(Node):
                 f"lane_evidence_side={lane_evidence_side}"
             )
 
-            if lane_evidence_side == "lane_evidence_unclear":
-                pass
+            
 
             if lane_pair_status != "valid_pair":
-                _, lane_evidence_side = self.classify_lane_evidence_from_points(left_eq, right_eq, lookahead_z)
 
+                _, lane_evidence_side = self.classify_lane_evidence_from_points(left_eq, right_eq, lookahead_z)
+                
                 rec.reason = f"{lane_pair_status}_{lane_evidence_side}"
                 rec.valid = True
                 rec.confidence = 0.3

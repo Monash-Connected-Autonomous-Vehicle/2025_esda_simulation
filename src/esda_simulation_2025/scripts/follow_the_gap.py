@@ -163,6 +163,9 @@ class FollowTheGap(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
+        self.forward_distance_threshold = 1.0  # Minimum distance to consider a gap safe in front of the robot. This can be tuned based on the robot's speed and stopping distance to ensure that the robot has enough time to react to obstacles in front of it while following gaps.
+        self.forward_scan_angle = math.radians(20.0)  # Angle range for checking the path ahead, e.g., 20 degrees to either side of the forward direction. This can be tuned to balance between being too cautious (narrow angle) and missing obstacles (wide angle) when evaluating if the path ahead is clear.
+
         self.scan_subscriber = self.create_subscription(
             LaserScan,
             self.lidar_topic,
@@ -208,6 +211,21 @@ class FollowTheGap(Node):
         self.get_logger().info(f'Received lane parameters - Right lane: gradient={right_lane_parameters[0]:.3f}, x_intercept={right_lane_parameters[1]:.3f} | Left lane: gradient={left_lane_parameters[0]:.3f}, x_intercept={left_lane_parameters[1]:.3f}')
 
         pass
+    
+    def check_if_path_ahead_is_clear(self, forward_ranges, forward_angles, clear_distance=7.0):
+        # Checks if the path ahead is clear by evaluating the LiDAR ranges within a narrow forward cone. If the majority of the points in this cone are beyond a certain clear distance, and there are no points that are too close, then the path ahead is considered clear. This can be used to determine when to yield to the track follower node if the path ahead is clear and safe to follow, allowing for smoother transitions between navigation strategies.
+        front_angle = self.forward_scan_angle  # narrow forward cone
+
+        front_mask = np.abs(forward_angles) < front_angle
+        front_ranges = forward_ranges[front_mask]
+
+        if front_ranges.size == 0:
+            return False  # safer than True
+
+        clear_ratio = np.mean(front_ranges > clear_distance)
+        min_front = float(np.min(front_ranges))
+
+        return clear_ratio > 0.80 and min_front > 0.6
 
     def lane_parameters_callback(self, msg):
         # This callback can be used to receive lane parameters from the track follower node, which can then be used to enhance the gap scoring by considering the lane information. For example, if the lane parameters indicate that the robot is close to the edge of the lane, the gap scoring can be adjusted to prefer gaps that are more centered within the lane, or to avoid gaps that lead towards the edge of the lane. This can help improve the safety and reliability of the navigation by leveraging the lane information provided by the track follower node.
@@ -217,8 +235,6 @@ class FollowTheGap(Node):
         left_lane_x_intercept = msg.left_lane_x_intercept
         
         self.is_within_lane(right_lane_parameters=(right_lane_gradient, right_lane_x_intercept), left_lane_parameters=(left_lane_gradient, left_lane_x_intercept))
-
-    
 
     def footprint_is_map_safe(self, yaw, max_distance=1.5, step=0.10):
         if self.latest_map is None:
@@ -332,8 +348,6 @@ class FollowTheGap(Node):
         self.map_origin_y = msg.info.origin.position.y
         self.map_data = np.array(msg.data, dtype=np.int16).reshape((self.map_height, self.map_width))
         self.latest_map = msg
-
-    
 
     def publish_cmd(self, linear_x, angular_z):
         cmd = Twist()

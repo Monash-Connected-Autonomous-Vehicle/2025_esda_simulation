@@ -148,6 +148,8 @@ class BehaviourTree(Node):
             if self.latest_follow_the_gap_recommendation_msg is not None and self.latest_follow_the_gap_recommendation_msg.valid and self.latest_follow_the_gap_recommendation_msg.reason == 'path_blocked':
                 self.get_logger().info('Follow The Gap recommendation is valid, switching to Follow The Gap state ===================================================================================================================================================================')
                 self.current_state = NavigationState.FOLLOW_THE_GAP
+                
+                self.get_logger().info('Follow The Gap recommendation indicates path is blocked, switching to Follow The Gap state')
                 return
             
             # Get the message from the track follower node and check if it is still valid based on the timestamp. If it is valid, we can use the recommended linear and angular velocities from the track follower node to control the robot's movement in the centreline following state. If the message is too old, we may choose to switch to a different navigation strategy or enter a recovery state to handle the situation appropriately.

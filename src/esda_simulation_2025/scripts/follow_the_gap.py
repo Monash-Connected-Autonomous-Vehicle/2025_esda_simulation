@@ -212,21 +212,6 @@ class FollowTheGap(Node):
 
         pass
     
-    def check_if_path_ahead_is_clear(self, forward_ranges, forward_angles, clear_distance=7.0):
-        # Checks if the path ahead is clear by evaluating the LiDAR ranges within a narrow forward cone. If the majority of the points in this cone are beyond a certain clear distance, and there are no points that are too close, then the path ahead is considered clear. This can be used to determine when to yield to the track follower node if the path ahead is clear and safe to follow, allowing for smoother transitions between navigation strategies.
-        front_angle = self.forward_scan_angle  # narrow forward cone
-
-        front_mask = np.abs(forward_angles) < front_angle
-        front_ranges = forward_ranges[front_mask]
-
-        if front_ranges.size == 0:
-            return False  # safer than True
-
-        clear_ratio = np.mean(front_ranges > clear_distance)
-        min_front = float(np.min(front_ranges))
-
-        return clear_ratio > 0.80 and min_front > 0.6
-
     def lane_parameters_callback(self, msg):
         # This callback can be used to receive lane parameters from the track follower node, which can then be used to enhance the gap scoring by considering the lane information. For example, if the lane parameters indicate that the robot is close to the edge of the lane, the gap scoring can be adjusted to prefer gaps that are more centered within the lane, or to avoid gaps that lead towards the edge of the lane. This can help improve the safety and reliability of the navigation by leveraging the lane information provided by the track follower node.
         right_lane_gradient = msg.right_lane_gradient
@@ -618,9 +603,6 @@ class FollowTheGap(Node):
         else:
             self.publish_cmd(linear_x, angular_z)
 
-        # self.get_logger().info(
-        #     f'gap_angle={math.degrees(gap_center_angle):.1f} deg, 'f'gap_depth={gap_depth:.2f} m, 'f'cmd=({linear_x:.2f} m/s, {angular_z:.2f} rad/s)'
-        # )
 
         # Saving the previous state as the current state
         self.previous_state = self.current_state

@@ -145,7 +145,7 @@ class BehaviourTree(Node):
             
 
             # Use the suggestions of the track_follower node
-            if self.latest_follow_the_gap_recommendation_msg is not None and self.latest_follow_the_gap_recommendation_msg.valid and self.latest_follow_the_gap_recommendation_msg.reason == 'path_blocked':
+            if self.latest_follow_the_gap_recommendation_msg is not None and self.latest_follow_the_gap_recommendation_msg.valid and self.latest_follow_the_gap_recommendation_msg.reason == NavigationRecommendation.OBSTACLE_DETECTED:
                 self.get_logger().info('Follow The Gap recommendation is valid, switching to Follow The Gap state ===================================================================================================================================================================')
                 self.current_state = NavigationState.FOLLOW_THE_GAP
                 
@@ -167,14 +167,14 @@ class BehaviourTree(Node):
             self.get_logger().info('Current state: FOLLOW_THE_GAP')
             if self.latest_follow_the_gap_recommendation_msg is not None:
 
-                if self.latest_follow_the_gap_recommendation_msg.reason == 'path_blocked':
+                if self.latest_follow_the_gap_recommendation_msg.reason == NavigationRecommendation.OBSTACLE_DETECTED:
                     self.get_logger().info('Follow The Gap recommendation indicates path is blocked, switching to recovery state')
                     self.publish_cmd_vel(0.0, 0.0)  # Stop the robot before switching to recovery state
                     # self.current_state = NavigationState.RECOVERY
                     return
                 
                 # If the follow the gap recommendation indicates that the path ahead is clear, we can switch back to centreline following state to continue following the lanes on the track. This allows us to seamlessly transition between the follow the gap strategy 
-                if self.latest_follow_the_gap_recommendation_msg.reason == 'path_ahead_clear':
+                if self.latest_follow_the_gap_recommendation_msg.reason == NavigationRecommendation.NO_OBSTACLE:
                     self.get_logger().info('Follow The Gap recommendation indicates path ahead is clear, switching back to centreline following state ===================================================================================================================================================================')
                     
                     # Changes to lane following state

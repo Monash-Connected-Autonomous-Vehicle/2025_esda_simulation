@@ -265,7 +265,7 @@ class TrackFollower(Node):
         self.lane_parameters_publisher.publish(lane_msg)
 
         rec = NavigationRecommendation()
-        rec.source = "track_follower"
+        rec.source = NavigationRecommendation.TRACK_FOLLOWER
         rec.valid = True
         rec.confidence = lane_msg.confidence
 
@@ -289,7 +289,8 @@ class TrackFollower(Node):
 
                 _, lane_evidence_side = self.classify_lane_evidence_from_points(left_eq, right_eq, lookahead_z)
 
-                rec.reason = f"{lane_pair_status}_{lane_evidence_side}"
+                rec.reason = NavigationRecommendation.INVALID_LANE_PAIR 
+                reason = f"{lane_pair_status}_{lane_evidence_side}"
                 rec.valid = True
                 rec.confidence = 0.3
                 rec.linear_x = 0.08
@@ -324,11 +325,13 @@ class TrackFollower(Node):
             centre_error = -centre_x
 
             if width_status == "normal":
-                rec.reason = f"both_lanes_normal_{lane_direction}"
+                rec.reason = NavigationRecommendation.BOTH_LANES_NORMAL_LANES_CENTRED
+                reason = f"both_lanes_normal_{lane_direction}"
                 rec.angular_z = max(min(0.6 * centre_error, 0.3), -0.3)
 
             elif width_status == "too_narrow":
-                rec.reason = f"both_lanes_too_narrow_{lane_direction}"
+                rec.reason = NavigationRecommendation.BOTH_LANES_TOO_NARROW_CENTRED
+                reason = f"both_lanes_too_narrow_{lane_direction}"
                 rec.linear_x = 0.10
 
                 if lane_direction == "lanes_shifted_left":
@@ -339,7 +342,8 @@ class TrackFollower(Node):
                     rec.angular_z = max(min(0.4 * centre_error, 0.2), -0.2)
 
             elif width_status == "too_wide":
-                rec.reason = f"both_lanes_too_wide_{lane_direction}"
+                rec.reason = NavigationRecommendation.BOTH_LANES_TOO_WIDE_CENTRED
+                reason = f"both_lanes_too_wide_{lane_direction}"
                 rec.confidence = 0.4
                 rec.linear_x = 0.08
                 rec.angular_z = max(min(0.4 * centre_error, 0.2), -0.2)
@@ -351,7 +355,8 @@ class TrackFollower(Node):
             desired_left_x = -self.track_width / 2.0
             error = desired_left_x - left_x
 
-            rec.reason = "only_left_lane_visible"
+            rec.reason = NavigationRecommendation.ONLY_LEFT_LANE_VISIBLE
+            reason = "only_left_lane_visible"
             rec.linear_x = 0.12
             rec.angular_z = max(min(-0.4 * error, 0.25), -0.25)
 
@@ -362,20 +367,22 @@ class TrackFollower(Node):
             desired_right_x = self.track_width / 2.0
             error = desired_right_x - right_x
 
-            rec.reason = "only_right_lane_visible"
+            rec.reason = NavigationRecommendation.ONLY_RIGHT_LANE_VISIBLE
+            reason = "only_right_lane_visible"
             rec.linear_x = 0.12
             rec.angular_z = max(min(-0.4 * error, 0.25), -0.25)
 
         # Case 4: no lanes visible
         else:
-            rec.reason = "no_lanes_visible"
+            rec.reason = NavigationRecommendation.NO_LANES_VISIBLE
+            reason = "no_lanes_visible"
             rec.valid = False
             rec.confidence = 0.0
             rec.linear_x = 0.0
             rec.angular_z = 0.0
 
         self.get_logger().info(
-            f"Track follower rec: reason={rec.reason}, "
+            f"Track follower rec: reason={reason}, "
             f"linear_x={rec.linear_x:.2f}, angular_z={rec.angular_z:.2f}, "
             f"confidence={rec.confidence:.2f}, valid={rec.valid}"
         )

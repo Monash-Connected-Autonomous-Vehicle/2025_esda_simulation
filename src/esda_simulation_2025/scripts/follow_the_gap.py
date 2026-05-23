@@ -490,12 +490,12 @@ class FollowTheGap(Node):
             self.get_logger().info('Path ahead is clear, yielding to track follower')
             # Send message to the behaviour tree node to indicate that the path ahead is clear and that the robot can yield to the track follower node. This can be used to trigger a switch back to the track following strategy if the path ahead is clear.
             follow_the_gap_msg_recommendation = NavigationRecommendation()
-            follow_the_gap_msg_recommendation.source = 'follow_the_gap'
+            follow_the_gap_msg_recommendation.source = NavigationRecommendation.FOLLOW_THE_GAP
             follow_the_gap_msg_recommendation.valid = False  # Path ahead is clear, no need for FTG recommendation
             follow_the_gap_msg_recommendation.confidence = 0.0  # No confidence in needing FTG recommendation
             follow_the_gap_msg_recommendation.linear_x = 0.0
             follow_the_gap_msg_recommendation.angular_z = 0.0
-            follow_the_gap_msg_recommendation.reason = 'path_ahead_clear'  # Custom field to indicate reason for yielding, can be used by the behaviour tree node to make informed decisions
+            follow_the_gap_msg_recommendation.reason = NavigationRecommendation.NO_OBSTACLE  # Custom field to indicate reason for yielding, can be used by the behaviour tree node to make informed decisions
 
             self.behaviour_tree_publisher.publish(follow_the_gap_msg_recommendation)
             return
@@ -535,12 +535,12 @@ class FollowTheGap(Node):
 
             # Send message to the behaviour tree node to indicate that the path is blocked and that the robot is stopping to re-evaluate the environment. This can be used to trigger a switch to a different navigation strategy or to trigger a recovery behavior if the robot is stuck.
             follow_the_gap_msg_recommendation = NavigationRecommendation()
-            follow_the_gap_msg_recommendation.source = 'follow_the_gap'
+            follow_the_gap_msg_recommendation.source = NavigationRecommendation.FOLLOW_THE_GAP
             follow_the_gap_msg_recommendation.valid = False  # Path is blocked, not safe to proceed
             follow_the_gap_msg_recommendation.confidence = 0.0  # No confidence in proceeding forward
             follow_the_gap_msg_recommendation.linear_x = 0.0
             follow_the_gap_msg_recommendation.angular_z = 0.0
-            follow_the_gap_msg_recommendation.reason = 'path_blocked'  # Custom field to indicate reason for stopping, can be used by the behaviour tree node to make informed decisions
+            follow_the_gap_msg_recommendation.reason = NavigationRecommendation.OBSTACLE_DETECTED  # Custom field to indicate reason for stopping, can be used by the behaviour tree node to make informed decisions
 
             self.behaviour_tree_publisher.publish(follow_the_gap_msg_recommendation)
 
@@ -591,7 +591,7 @@ class FollowTheGap(Node):
         if self.recommendation_config:
             # self.get_logger().info('Publishing Follow the Gap recommendation to behaviour tree node\n===================================================================================================================================================================')
             follow_the_gap_msg_recommendation = NavigationRecommendation()
-            follow_the_gap_msg_recommendation.source = 'follow_the_gap'
+            follow_the_gap_msg_recommendation.source = NavigationRecommendation.FOLLOW_THE_GAP
             follow_the_gap_msg_recommendation.valid = True
             follow_the_gap_msg_recommendation.confidence = 1.0
             follow_the_gap_msg_recommendation.linear_x = linear_x

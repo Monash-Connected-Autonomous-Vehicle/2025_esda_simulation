@@ -80,6 +80,7 @@ class BehaviourTree(Node):
             10
         )
 
+
         # Latest NavigationRecommendation messages from the track follower and follow the gap nodes, which we will use in our control loop to make decisions about which navigation strategy to use based on the current state of the robot and the environment.
         self.latest_track_recommendation_msg = None
         self.latest_follow_the_gap_recommendation_msg = None

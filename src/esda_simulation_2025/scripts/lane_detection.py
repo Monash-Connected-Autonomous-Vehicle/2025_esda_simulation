@@ -130,6 +130,49 @@ class LaneDetectionNode(Node):
         except Exception as e:
             self.get_logger().error(f'Right Image Error: {e}')
 
+    def apply_transform_to_points(self, points, transform_stamped):
+        """
+        Apply a geometry_msgs/TransformStamped to an (N,3) numpy array of points.
+        Returns an (N,3) numpy array in the target frame.
+        """
+        if points.size == 0:
+            return points
+
+        # Translation
+        tx = transform_stamped.transform.translation.x
+        ty = transform_stamped.transform.translation.y
+        tz = transform_stamped.transform.translation.z
+
+        # Rotation quaternion
+        q = transform_stamped.transform.rotation
+        qx = q.x
+        qy = q.y
+        qz = q.z
+        qw = q.w
+
+        # Build rotation matrix from quaternion
+        # Reference: quaternion to rotation matrix
+        xx = qx * qx
+        yy = qy * qy
+        zz = qz * qz
+        xy = qx * qy
+        xz = qx * qz
+        yz = qy * qz
+        wx = qw * qx
+        wy = qw * qy
+        wz = qw * qz
+
+        R = np.array([
+            [1 - 2 * (yy + zz),     2 * (xy - wz),         2 * (xz + wy)],
+            [2 * (xy + wz),         1 - 2 * (xx + zz),     2 * (yz - wx)],
+            [2 * (xz - wy),         2 * (yz + wx),         1 - 2 * (xx + yy)]
+        ], dtype=np.float64)
+
+        pts = np.asarray(points, dtype=np.float64)
+        transformed = (R.dot(pts.T)).T
+        transformed += np.array([tx, ty, tz], dtype=np.float64)
+        return transformed
+
     def scan_callback(self, msg):
         """
         Receive LaserScan, inject lane obstacles, and republish to /scan_fused
@@ -155,23 +198,12 @@ class LaneDetectionNode(Node):
                 laser_frame,
                 camera_frame,
                 rclpy.time.Time())
-                
-            for pt in self.latest_3d_points:
-                # Create PointStamped
-                p = PointStamped()
-                p.header.frame_id = camera_frame
-                # Ensure native Python float types (ROS2 rejects numpy types)
-                p.point.x = float(pt[0])
-                p.point.y = float(pt[1])
-                p.point.z = float(pt[2])
-                
-                # Transform
-                p_laser = do_transform_point(p, trans)
-                
-                lx = p_laser.point.x
-                ly = p_laser.point.y
-                
-                # Convert to Polar
+            # Transform all cached 3D points in bulk to the laser frame
+            pts = np.array(self.latest_3d_points, dtype=np.float64)
+            pts_laser = self.apply_transform_to_points(pts, trans)
+
+            for lx, ly, lz in pts_laser:
+                # Convert to Polar (use x=forward, y=left/right depending on frames)
                 dist = math.sqrt(lx*lx + ly*ly)
                 angle = math.atan2(ly, lx)
                 
@@ -583,13 +615,12 @@ class LaneDetectionNode(Node):
         msg.point_step = 12
         msg.row_step = 12 * len(points)
         
-        # Pack binary data
-        buffer = []
-        for p in points:
-            buffer.append(struct.pack('fff', p[0], p[1], p[2]))
-            
-        msg.data = b''.join(buffer)
-        
+        # Pack binary data efficiently using NumPy
+        arr = np.asarray(points, dtype=np.float32)
+        msg.data = arr.tobytes()
+        # is_dense is false if any NaNs present
+        msg.is_dense = not np.isnan(arr).any()
+
         self.cloud_pub.publish(msg)
 
     def publish_lane_markers(self, lines, header):

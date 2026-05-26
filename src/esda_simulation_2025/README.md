@@ -100,6 +100,12 @@ echo "source ~/esda_sim_ws/install/setup.bash" >> ~/.bashrc
 
 ## 2. Launching the Simulation
 
+Remember to run after launching a terminal and colcon building:
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+```
+
 ### 2.1. 🎮 Using the Simulation Manager GUI (Recommended)
 
 The **ESDA Simulation Manager** provides a complete graphical interface. Run it from your workspace:

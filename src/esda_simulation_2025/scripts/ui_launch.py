@@ -139,7 +139,16 @@ class SimManager(ctk.CTk):
         self.nav_button.grid(row=1, column=0, padx=6, pady=6, sticky="ew")
         self.rviz_button = ctk.CTkButton(self.modules_frame, text="Launch RViz2", command=self.toggle_rviz, font=("Orbitron", 12), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
         self.rviz_button.grid(row=1, column=1, padx=6, pady=6, sticky="ew")
+        self.follow_the_gap_button = ctk.CTkButton(self.modules_frame, text="Follow the Gap Algorithm", command=self.toggle_follow_the_gap, font=("Orbitron", 12), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
+        self.follow_the_gap_button.grid(row=2, column=0, padx=6, pady=6, sticky="ew")
+        self.track_follower_button = ctk.CTkButton(self.modules_frame, text="Track Follower Algorithm", command=self.launch_track_follower, font=("Orbitron", 12), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
+        self.track_follower_button.grid(row=2, column=1, padx=6, pady=6, sticky="ew")
         self.modules_frame.grid_columnconfigure((0,1), weight=1)
+
+
+        self.behaviour_tree_button = ctk.CTkButton(self.modules_frame, text="Launch Behaviour Tree", command=self.launch_behaviour_tree, font=("Orbitron", 12), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
+        self.behaviour_tree_button.grid(row=3, column=0, columnspan=2, padx=6, pady=6, sticky="ew")
+        self.modules_frame.grid_rowconfigure((0,1,2,3), weight=1)
 
         # Teleop and Waypoint Section
         self.teleop_frame = ctk.CTkFrame(self, fg_color=self.bg_panel)
@@ -461,6 +470,27 @@ class SimManager(ctk.CTk):
             use_sim_time = "true" if self.is_sim_running() else "false"
             cmd = f"rviz2 -d {rviz_config} --ros-args -p use_sim_time:={use_sim_time}"
             self.run_in_terminal("RVIZ", cmd)
+
+    def toggle_follow_the_gap(self):
+        if not self.is_sim_running():
+            self.status_label.configure(text="Error: Launch Simulation first!", text_color="#E74C3C")
+            return
+        cmd = f"ros2 run esda_simulation_2025 follow_the_gap.py"
+        self.run_in_terminal("FOLLOW_THE_GAP", cmd)
+
+    def launch_track_follower(self):
+        if not self.is_sim_running():
+            self.status_label.configure(text="Error: Launch Simulation first!", text_color="#E74C3C")
+            return
+        cmd = f"ros2 run esda_simulation_2025 track_follower.py"
+        self.run_in_terminal("TRACK_FOLLOWER", cmd)
+
+    def launch_behaviour_tree(self):
+        if not self.is_sim_running():
+            self.status_label.configure(text="Error: Launch Simulation first!", text_color="#E74C3C")
+            return
+        cmd = f"ros2 run esda_simulation_2025 behaviour_tree.py"
+        self.run_in_terminal("BEHAVIOUR_TREE", cmd)
     
     def _launch_rviz_delayed(self, rviz_config):
         time.sleep(2)  # Wait for SLAM to publish the map

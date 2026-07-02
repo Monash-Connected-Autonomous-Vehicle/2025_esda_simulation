@@ -128,10 +128,25 @@ class BehaviourTree(Node):
             f'Published cmd_vel: linear_x={linear_x:.2f} m/s, angular_z={angular_z:.2f} rad/s'
         )
 
+    def should_enter_recovery_mode(self):
+        # This function will determine whether the robot should enter the recovery mode based on the current state and the latest sensor data. We will implement logic here to check if the robot is stuck or encounters an unexpected situation, and if so, we will return True to indicate that we should enter the recovery mode.
+
+        # Check if there is an obstacle detected directly in front such that the robot can't see a clear path forward, and if so, we will return True to indicate that we should enter the recovery mode. This will help us handle situations where the robot is stuck or encounters an unexpected situation by switching to a recovery strategy to try to get unstuck or find a clear path forward.
+
+        if self.latest_follow_the_gap_recommendation_msg is not None and self.latest_follow_the_gap_recommendation_msg.reason == NavigationRecommendation.RECOVERY_REQUIRED:
+            self.get_logger().info('Recovery required based on Follow The Gap recommendation, entering recovery mode')
+            self.destroy_node()
+            
+
+
+        pass
     
     def control_loop(self):
         # This is the main control loop that will be called periodically by the timer. In this loop, we will check the current state of the robot and the environment based on the latest sensor data, and we will switch between different navigation strategies accordingly. We will also implement a recovery strategy for handling situations where the robot is stuck or encounters an unexpected situation.
         
+        # Check if we need to enter the recovery mode
+
+
         if self.current_state == NavigationState.CENTRELINE_FOLLOWING:
             # Implement logic for centreline following navigation strategy
             # self.latest_track_recommendation_msg

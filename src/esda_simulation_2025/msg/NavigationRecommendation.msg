@@ -31,6 +31,8 @@ uint8 NO_LANES_VISIBLE = 16
 
 uint8 INVALID_LANE_PAIR = 17
 
+uint8 RECOVERY_REQUIRED = 18
+
 uint8 reason
 
 

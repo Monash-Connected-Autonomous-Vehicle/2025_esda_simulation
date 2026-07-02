@@ -51,6 +51,7 @@ from esda_simulation_2025.msg import NavigationRecommendation, LaneParameters
 # Wigglling problem - Robot keeps turning left and right --> 'S' shape --> Set limit threshold e,g, 2m or 3m, then follow centre of deepest gap until the robot is within the threshold distance to the goal, then switch to a different navigation strategy (e.g., A* or Dijkstra's) to navigate the remaining distance to the goal.
 
 # NOTE: This code is to be used in conjunction with track_follower.py. which will handle the overall track following around the entire map
+# NOTE: Follow the Gap must also be used before the track follower as the track follower seems to detect the cones as a lane...
 
 class States(Enum):
     NO_SAFE_GAPS = 0
@@ -342,6 +343,16 @@ class FollowTheGap(Node):
 
     def stop_robot(self):
         self.publish_cmd(0.0, 0.0)
+        
+        follow_the_gap_msg_recommendation = NavigationRecommendation()
+        follow_the_gap_msg_recommendation.source = NavigationRecommendation.FOLLOW_THE_GAP 
+        follow_the_gap_msg_recommendation.valid = False
+        follow_the_gap_msg_recommendation.confidence = 0.0
+        follow_the_gap_msg_recommendation.linear_x = 0.0
+        follow_the_gap_msg_recommendation.angular_z = 0.0
+        follow_the_gap_msg_recommendation.reason = NavigationRecommendation.RECOVERY_REQUIRED
+
+        self.behaviour_tree_publisher.publish(follow_the_gap_msg_recommendation)
 
     def find_disparities(self, lidar_data):
         disparities = []

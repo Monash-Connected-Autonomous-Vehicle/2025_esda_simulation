@@ -50,6 +50,7 @@ install(DIRECTORY
 # Install Python scripts
 install(PROGRAMS
   scripts/lane_detection.py
+  scripts/lane_detection_FCN.py
   scripts/teleop_wasd.py
   scripts/ui_launch.py
   scripts/waypoint_navigator.py

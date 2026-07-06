@@ -123,6 +123,10 @@ class FollowTheGap(Node):
         self.declare_parameter('forward_bias_gain', 0.35)
         self.declare_parameter('recommendation_config', True) # Whether to publish recommendations to the behaviour tree node, can be set to False for testing the FTG algorithm in isolation without affecting the overall behaviour tree logic. This allows for more focused testing and debugging of the FTG algorithm itself or straight /cmd_vel commands, without needing to consider the interactions with the behaviour tree node
 
+        # Weighting parameters
+        self.ftg_confidence_weight = 0.0
+        
+
         self.recommendation_config = self.get_parameter('recommendation_config').get_parameter_value().bool_value
 
         self.lidar_topic = self.get_parameter('lidar_topic').get_parameter_value().string_value
@@ -539,6 +543,8 @@ class FollowTheGap(Node):
         ]
 
         best_gap = self.score_gap(extended_ranges, safe_groups, forward_angles)
+
+        self.get_logger().info(f'<DEBUG> Best gap: {best_gap}')
 
         if best_gap is None:
             self.get_logger().warn('No safe gap found')

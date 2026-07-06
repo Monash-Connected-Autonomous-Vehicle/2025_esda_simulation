@@ -106,6 +106,8 @@ class BehaviourTree(Node):
         self.current_yaw = 0.0
         self.odom_received = False
 
+        self.start_time = self.get_clock().now()
+
     def odom_callback(self, msg):
         # This callback will be called whenever a new Odometry message is received. We will use this information to calculate the distance to the goal and determine when to switch to the goal navigation strategy as we get closer to the goal.
         orientation = msg.pose.pose.orientation
@@ -132,19 +134,25 @@ class BehaviourTree(Node):
         # This function will determine whether the robot should enter the recovery mode based on the current state and the latest sensor data. We will implement logic here to check if the robot is stuck or encounters an unexpected situation, and if so, we will return True to indicate that we should enter the recovery mode.
 
         # Check if there is an obstacle detected directly in front such that the robot can't see a clear path forward, and if so, we will return True to indicate that we should enter the recovery mode. This will help us handle situations where the robot is stuck or encounters an unexpected situation by switching to a recovery strategy to try to get unstuck or find a clear path forward.
-
         if self.latest_follow_the_gap_recommendation_msg is not None and self.latest_follow_the_gap_recommendation_msg.reason == NavigationRecommendation.RECOVERY_REQUIRED:
-            self.get_logger().info('Recovery required based on Follow The Gap recommendation, entering recovery mode')
-            self.destroy_node()
-            
+            self.publish_cmd_vel(0.0, 0.0)  # Stop the robot before entering recovery mode
 
 
-        pass
+
+            return True
+        
+        return False
+
     
     def control_loop(self):
         # This is the main control loop that will be called periodically by the timer. In this loop, we will check the current state of the robot and the environment based on the latest sensor data, and we will switch between different navigation strategies accordingly. We will also implement a recovery strategy for handling situations where the robot is stuck or encounters an unexpected situation.
         
+        # TODO: Implement logic to check the distance to the goal and switch to goal navigation strategy when close to the goal. This will allow the robot to navigate directly towards the goal when appropriate, based on the current state and the distance to the goal.
         # Check if we need to enter the recovery mode
+        if self.should_enter_recovery_mode() and self.get_clock().now() - self.start_time > rclpy.duration.Duration(seconds=15.0):
+            self.get_logger().info('Entering recovery mode')
+            self.current_state = NavigationState.RECOVERY    
+            return
 
 
         if self.current_state == NavigationState.CENTRELINE_FOLLOWING:
@@ -226,6 +234,11 @@ class BehaviourTree(Node):
             # Implement logic for recovery strategy to handle situations where the robot is stuck or encounters an unexpected situation
 
             # Rotate in place slowly to try to get unstuck or find a clear path forward. We can use the recovery_spin_angle parameter to determine how much to rotate in place in the recovery strategy. This is a simple recovery strategy that can help the robot get unstuck or find a clear path forward
+            # Drive backwards
+            self.publish_cmd_vel(-0.1, 0.0)  # Drive backwards slowly to try to get unstuck or create some space for recovery maneuver
+
+            # Rotate in place slowly to try to get unstuck or find a clear path forward. We can use the recovery_spin_angle parameter to determine how much to rotate in place in the recovery strategy. This is a simple recovery strategy that can help the robot get unstuck or find a clear path forward
+            
 
             self.publish_cmd_vel(0.0, 0.2)
 

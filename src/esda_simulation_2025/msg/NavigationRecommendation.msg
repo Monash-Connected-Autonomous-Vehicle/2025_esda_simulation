@@ -16,25 +16,23 @@ uint8 UNSAFE_TO_PROCEED = 4 # e,g, Can't continue as it is unsafe
 uint8 BOTH_LANES_NORMAL_LANES_SHIFTED_RIGHT = 5
 uint8 BOTH_LANES_NORMAL_LANES_SHIFTED_LEFT = 6
 uint8 BOTH_LANES_NORMAL_LANES_CENTRED = 7
-
 uint8 BOTH_LANES_TOO_NARROW_SHIFTED_RIGHT = 8
 uint8 BOTH_LANES_TOO_NARROW_SHIFTED_LEFT = 9
 uint8 BOTH_LANES_TOO_NARROW_CENTRED = 10
-
 uint8 BOTH_LANES_TOO_WIDE_SHIFTED_RIGHT = 11
 uint8 BOTH_LANES_TOO_WIDE_SHIFTED_LEFT = 12
 uint8 BOTH_LANES_TOO_WIDE_CENTRED = 13
-
 uint8 ONLY_LEFT_LANE_VISIBLE = 14
 uint8 ONLY_RIGHT_LANE_VISIBLE = 15
 uint8 NO_LANES_VISIBLE = 16
-
 uint8 INVALID_LANE_PAIR = 17
-
 uint8 RECOVERY_REQUIRED = 18
 
 uint8 reason
 
+# Weightings
+uint8 ftg_weighting
+uint8 track_following_weighting
 
 uint8 mode              # e.g. ENUMs that correspond to the behaviour tree
 

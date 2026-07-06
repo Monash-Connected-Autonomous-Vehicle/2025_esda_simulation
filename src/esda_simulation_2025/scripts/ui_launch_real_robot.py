@@ -109,6 +109,7 @@ class SimManager(ctk.CTk):
         self.sim_frame.grid(row=3, column=0, pady=6, padx=16, sticky="ew")
         self.sim_frame.grid_columnconfigure(0, weight=1)
         self.sim_frame.grid_columnconfigure(1, weight=1)
+        self.sim_frame.grid_columnconfigure(2, weight=1)
 
         self.lidar_var = ctk.BooleanVar(value=True)
         self.lidar_check = ctk.CTkCheckBox(self.sim_frame, text="Enable LIDAR", variable=self.lidar_var, font=("Orbitron", 14), text_color=self.accent_blue, bg_color=self.bg_panel)
@@ -118,8 +119,20 @@ class SimManager(ctk.CTk):
         self.lane_detection_check = ctk.CTkCheckBox(self.sim_frame, text="Enable Lane Detection", variable=self.lane_detection_var, font=("Orbitron", 14), text_color=self.accent_purple, bg_color=self.bg_panel)
         self.lane_detection_check.grid(row=0, column=1, padx=10, pady=6, sticky="w")
 
+        self.lane_detector_mode = ctk.StringVar(value="FCN")
+        self.lane_mode_dropdown = ctk.CTkOptionMenu(
+            self.sim_frame,
+            variable=self.lane_detector_mode,
+            values=["Regular", "FCN"],
+            width=130,
+            fg_color=self.bg_dark,
+            button_color=self.accent_purple,
+            text_color=self.fg_text
+        )
+        self.lane_mode_dropdown.grid(row=0, column=2, padx=10, pady=6, sticky="e")
+
         self.sim_button = ctk.CTkButton(self.sim_frame, text="2. Launch Simulation", command=self.toggle_sim, font=("Orbitron", 16, "bold"), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
-        self.sim_button.grid(row=0, column=2, padx=10, pady=6, sticky="e")
+        self.sim_button.grid(row=0, column=3, padx=10, pady=6, sticky="e")
 
         # Remove SLAM Options Section (now merged)
 
@@ -391,7 +404,14 @@ class SimManager(ctk.CTk):
         # Launch lane detection if enabled
         if self.lane_detection_var.get():
             time.sleep(2)  # Give SLAM time to start
-            lane_cmd = (f"ros2 run esda_simulation_2025 lane_detection.py ")
+            if self.lane_detector_mode.get() == "FCN":
+                model_path = f"{self.workspace_root}/lane-detection-on-rural-roads-master/CS542_Project/Code/FCN_model.h5"
+                lane_cmd = (
+                    f"ros2 run esda_simulation_2025 lane_detection_FCN.py "
+                    f"--ros-args -p fcn_model_path:={model_path}"
+                )
+            else:
+                lane_cmd = "ros2 run esda_simulation_2025 lane_detection.py"
             self.run_in_terminal("LANE", lane_cmd)
 
     def toggle_amcl(self):

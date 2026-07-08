@@ -56,6 +56,19 @@ class BehaviourTree(Node):
         self.declare_parameter('robot_frame', 'base_link')
         self.declare_parameter('frame_id', 'map')   
 
+        self.declare_parameter('cone_near_distance', 1.4)
+        self.declare_parameter('cone_far_distance', 1.8)
+        self.declare_parameter('cone_front_half_angle_deg', 35.0)
+        self.declare_parameter('cone_hold_time_sec', 1.0)
+
+        self.lidar_topic = self.get_parameter('lidar_topic').get_parameter_value().string_value
+        self.cone_near_distance = self.get_parameter('cone_near_distance').get_parameter_value().double_value
+        self.cone_far_distance = self.get_parameter('cone_far_distance').get_parameter_value().double_value
+        self.cone_front_half_angle = math.radians(
+            self.get_parameter('cone_front_half_angle_deg').get_parameter_value().double_value
+        )
+        self.cone_hold_time_sec = self.get_parameter('cone_hold_time_sec').get_parameter_value().double_value
+
         # Subscribes to the track follower node
         self.track_follower_subscription = self.create_subscription(
             NavigationRecommendation, 
@@ -77,6 +90,13 @@ class BehaviourTree(Node):
             Odometry,
             '/diff_drive_base_controller/odom',
             self.odom_callback,
+            10
+        )
+
+        self.scan_subscriber = self.create_subscription(
+            LaserScan,
+            self.lidar_topic,
+            self.scan_callback,
             10
         )
 
@@ -106,7 +126,47 @@ class BehaviourTree(Node):
         self.current_yaw = 0.0
         self.odom_received = False
 
+        self.cone_nearby = False
+        self.min_front_distance = float('inf')
+        self.last_cone_detection_time = self.get_clock().now()
+
         self.start_time = self.get_clock().now()
+
+    def scan_callback(self, msg):
+        ranges = np.array(msg.ranges, dtype=np.float32)
+        if ranges.size == 0:
+            return
+
+        ranges[np.isnan(ranges)] = msg.range_max
+        ranges[np.isinf(ranges)] = msg.range_max
+        ranges = np.clip(ranges, msg.range_min, msg.range_max)
+
+        angles = msg.angle_min + np.arange(ranges.size) * msg.angle_increment
+        front_mask = np.abs(angles) <= self.cone_front_half_angle
+        front_ranges = ranges[front_mask]
+
+        if front_ranges.size == 0:
+            return
+
+        self.min_front_distance = float(np.min(front_ranges))
+        now = self.get_clock().now()
+
+        if self.min_front_distance <= self.cone_near_distance:
+            self.cone_nearby = True
+            self.last_cone_detection_time = now
+            return
+
+        if self.min_front_distance >= self.cone_far_distance:
+            time_since_detection = (now - self.last_cone_detection_time).nanoseconds / 1e9
+            if time_since_detection >= self.cone_hold_time_sec:
+                self.cone_nearby = False
+
+    def follow_the_gap_msg_is_fresh(self):
+        if self.latest_follow_the_gap_recommendation_timestamp is None:
+            return False
+
+        age = (self.get_clock().now() - self.latest_follow_the_gap_recommendation_timestamp).nanoseconds / 1e9
+        return age < self.max_age_time
 
     def odom_callback(self, msg):
         # This callback will be called whenever a new Odometry message is received. We will use this information to calculate the distance to the goal and determine when to switch to the goal navigation strategy as we get closer to the goal.
@@ -168,13 +228,13 @@ class BehaviourTree(Node):
             # self.destroy_node()
             
 
-            # Use the suggestions of the track_follower node
-            if self.latest_follow_the_gap_recommendation_msg is not None and self.latest_follow_the_gap_recommendation_msg.valid and self.latest_follow_the_gap_recommendation_msg.reason == NavigationRecommendation.OBSTACLE_DETECTED:
-                self.get_logger().info('Follow The Gap recommendation is valid, switching to Follow The Gap state ===================================================================================================================================================================')
-                self.current_state = NavigationState.FOLLOW_THE_GAP
-                
-                self.get_logger().info('Follow The Gap recommendation indicates path is blocked, switching to Follow The Gap state')
-                return
+            if self.latest_follow_the_gap_recommendation_msg is not None and self.follow_the_gap_msg_is_fresh():
+                if self.cone_nearby and self.latest_follow_the_gap_recommendation_msg.valid:
+                    self.get_logger().info(
+                        f'Cone detected nearby (min_front={self.min_front_distance:.2f} m), prioritising Follow The Gap'
+                    )
+                    self.current_state = NavigationState.FOLLOW_THE_GAP
+                    return
             
             # Get the message from the track follower node and check if it is still valid based on the timestamp. If it is valid, we can use the recommended linear and angular velocities from the track follower node to control the robot's movement in the centreline following state. If the message is too old, we may choose to switch to a different navigation strategy or enter a recovery state to handle the situation appropriately.
             if self.latest_track_recommendation_msg is not None:
@@ -190,22 +250,22 @@ class BehaviourTree(Node):
             # Implement logic for follow the gap navigation strategy
             self.get_logger().info('Current state: FOLLOW_THE_GAP')
             if self.latest_follow_the_gap_recommendation_msg is not None:
-
-                if self.latest_follow_the_gap_recommendation_msg.reason == NavigationRecommendation.OBSTACLE_DETECTED:
-                    self.get_logger().info('Follow The Gap recommendation indicates path is blocked, switching to recovery state')
-                    self.publish_cmd_vel(0.0, 0.0)  # Stop the robot before switching to recovery state
-                    # self.current_state = NavigationState.RECOVERY
-                    return
                 
                 # If the follow the gap recommendation indicates that the path ahead is clear, we can switch back to centreline following state to continue following the lanes on the track. This allows us to seamlessly transition between the follow the gap strategy 
-                if self.latest_follow_the_gap_recommendation_msg.reason == NavigationRecommendation.NO_OBSTACLE:
+                if (
+                    self.latest_follow_the_gap_recommendation_msg.reason == NavigationRecommendation.NO_OBSTACLE
+                    and not self.cone_nearby
+                ):
                     self.get_logger().info('Follow The Gap recommendation indicates path ahead is clear, switching back to centreline following state ===================================================================================================================================================================')
                     
                     # Changes to lane following state
                     self.current_state = NavigationState.CENTRELINE_FOLLOWING
                     return
                 
-                if not self.latest_follow_the_gap_recommendation_msg.valid:
+                if (
+                    not self.latest_follow_the_gap_recommendation_msg.valid
+                    and self.latest_follow_the_gap_recommendation_msg.reason != NavigationRecommendation.NO_OBSTACLE
+                ):
                     self.current_state = NavigationState.RECOVERY
                     return
 

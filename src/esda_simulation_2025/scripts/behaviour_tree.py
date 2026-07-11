@@ -100,6 +100,8 @@ class BehaviourTree(Node):
             10
         )
 
+        
+
 
         # Latest NavigationRecommendation messages from the track follower and follow the gap nodes, which we will use in our control loop to make decisions about which navigation strategy to use based on the current state of the robot and the environment.
         self.latest_track_recommendation_msg = None
@@ -214,6 +216,22 @@ class BehaviourTree(Node):
             self.current_state = NavigationState.RECOVERY    
             return
 
+        # Global near-obstacle override: always prioritize Follow The Gap when obstacle is near.
+        if self.cone_nearby and self.current_state != NavigationState.FOLLOW_THE_GAP:
+            self.get_logger().info(
+                f'Near obstacle detected (min_front={self.min_front_distance:.2f} m). Forcing FOLLOW_THE_GAP.'
+            )
+            self.current_state = NavigationState.FOLLOW_THE_GAP
+            return
+
+        # Global safety: if both recommendation sources are too old/missing, emit safe forward motion
+        track_is_fresh = (
+            self.latest_track_recommendation_msg is not None 
+            and self.latest_track_recommendation_timestamp is not None
+            and (self.get_clock().now() - self.latest_track_recommendation_timestamp).nanoseconds / 1e9 < self.max_age_time
+        )
+        ftg_is_fresh = self.follow_the_gap_msg_is_fresh()
+
 
         if self.current_state == NavigationState.CENTRELINE_FOLLOWING:
             # Implement logic for centreline following navigation strategy
@@ -244,6 +262,10 @@ class BehaviourTree(Node):
                 twist_cmd_msg.linear.x = self.latest_track_recommendation_msg.linear_x
                 twist_cmd_msg.angular.z = self.latest_track_recommendation_msg.angular_z
                 self.publish_cmd_vel(twist_cmd_msg.linear.x, twist_cmd_msg.angular.z)
+            else:
+                # No track follower message yet, emit safe forward-slow movement
+                self.get_logger().warn('No Track Follower message yet, publishing default slow forward motion')
+                self.publish_cmd_vel(0.05, 0.0)
 
             pass
         elif self.current_state == NavigationState.FOLLOW_THE_GAP:
@@ -256,10 +278,24 @@ class BehaviourTree(Node):
                     self.latest_follow_the_gap_recommendation_msg.reason == NavigationRecommendation.NO_OBSTACLE
                     and not self.cone_nearby
                 ):
-                    self.get_logger().info('Follow The Gap recommendation indicates path ahead is clear, switching back to centreline following state ===================================================================================================================================================================')
-                    
-                    # Changes to lane following state
+                    self.get_logger().info('Follow The Gap recommendation indicates path ahead is clear, switching back to centreline following state')
                     self.current_state = NavigationState.CENTRELINE_FOLLOWING
+                    return
+                
+                # If FTG says "yield" (NO_OBSTACLE) but cones are nearby, don't execute its zero velocities
+                if (
+                    self.latest_follow_the_gap_recommendation_msg.reason == NavigationRecommendation.NO_OBSTACLE
+                    and self.cone_nearby
+                ):
+                    self.get_logger().info('FTG says clear but obstacle still near, staying in FOLLOW_THE_GAP')
+                    # Keep using FTG command stream while near obstacle.
+                    if self.latest_follow_the_gap_recommendation_msg.valid:
+                        self.publish_cmd_vel(
+                            self.latest_follow_the_gap_recommendation_msg.linear_x,
+                            self.latest_follow_the_gap_recommendation_msg.angular_z
+                        )
+                    else:
+                        self.publish_cmd_vel(0.08, 0.0)
                     return
                 
                 if (
@@ -273,16 +309,20 @@ class BehaviourTree(Node):
                 current_time = self.get_clock().now()
                 follow_the_gap_msg_age = (current_time - self.latest_follow_the_gap_recommendation_timestamp).nanoseconds / 1e9  # Convert to seconds
 
-                if follow_the_gap_msg_age < self.max_age_time:
+                if follow_the_gap_msg_age < self.max_age_time and self.latest_follow_the_gap_recommendation_msg.valid:
                     # The follow the gap recommendation message is still valid, so we can use it to control the robot's movement based on the recommended linear and angular velocities.
                     self.publish_cmd_vel(
                         self.latest_follow_the_gap_recommendation_msg.linear_x,
                         self.latest_follow_the_gap_recommendation_msg.angular_z
                     )
                 else:
-                    # The follow the gap recommendation message is too old, so we may choose to switch to a different navigation strategy or enter a recovery state to handle the situation appropriately. For example, we could switch back to centreline following or enter a recovery state if we are currently in follow the gap mode and the recommendations are no longer valid.
-                    self.get_logger().warn('Follow the Gap recommendation message is too old, switching to recovery state')
-                    self.current_state = NavigationState.RECOVERY
+                    # The follow the gap recommendation message is too old or invalid, so publish safe motion
+                    self.get_logger().warn('Follow the Gap recommendation message is too old or invalid, publishing safe motion')
+                    self.publish_cmd_vel(0.08, 0.0)
+            else:
+                # No FTG message yet, emit safe forward-slow movement to keep robot moving until nodes are ready
+                self.get_logger().warn('No Follow The Gap message yet, publishing default slow forward motion')
+                self.publish_cmd_vel(0.05, 0.0)
 
             
         elif self.current_state == NavigationState.GOAL_NAVIGATION:
@@ -291,30 +331,25 @@ class BehaviourTree(Node):
 
         elif self.current_state == NavigationState.RECOVERY:
             self.get_logger().info('In recovery state, attempting to get unstuck or handle unexpected situation')
-            # Implement logic for recovery strategy to handle situations where the robot is stuck or encounters an unexpected situation
-
-            # Rotate in place slowly to try to get unstuck or find a clear path forward. We can use the recovery_spin_angle parameter to determine how much to rotate in place in the recovery strategy. This is a simple recovery strategy that can help the robot get unstuck or find a clear path forward
-            # Drive backwards
-            self.publish_cmd_vel(-0.1, 0.0)  # Drive backwards slowly to try to get unstuck or create some space for recovery maneuver
-
-            # Rotate in place slowly to try to get unstuck or find a clear path forward. We can use the recovery_spin_angle parameter to determine how much to rotate in place in the recovery strategy. This is a simple recovery strategy that can help the robot get unstuck or find a clear path forward
             
+            # Move forward slowly while gently rotating to find a clear path
+            self.publish_cmd_vel(0.08, 0.15)
 
-            self.publish_cmd_vel(0.0, 0.2)
-
+            # Try to escape recovery if valid recommendations come back
             if self.latest_follow_the_gap_recommendation_msg is not None and self.latest_follow_the_gap_recommendation_msg.valid:
-                # If the follow the gap recommendation becomes valid again, we can switch back to the follow the gap navigation strategy to continue navigating based on the recommendations from the follow the gap node.
-                self.get_logger().info('Follow the Gap recommendation is valid again, switching back to Follow the Gap state ===================================================================================================================================================================')
+                self.get_logger().info('Follow the Gap recommendation is valid again, switching back to Follow the Gap state')
                 self.current_state = NavigationState.FOLLOW_THE_GAP
                 return
 
-            # If sees a valid track follow then go towards it
             if self.latest_track_recommendation_msg is not None and self.latest_track_recommendation_msg.valid:
-                # Go back to Follow the Gap algorithm
-                self.get_logger().info('Track Follower recommendation is valid again, switching back to Follow the Gap state ===================================================================================================================================================================')
-                pass
-            
-            pass
+                self.get_logger().info('Track Follower recommendation is valid again, switching back to Follow the Gap state')
+                self.current_state = NavigationState.FOLLOW_THE_GAP
+                return
+        
+        # Global safety fallback: if no fresh recommendations from either node, emit safe slow forward
+        if not track_is_fresh and not ftg_is_fresh:
+            self.get_logger().warn('Both navigation sources stale/unavailable, publishing fallback motion')
+            self.publish_cmd_vel(0.05, 0.0)
 
     def track_follower_callback(self, msg):
         # This callback will be called whenever a new message is received from the track follower node. We will use this information to update our current state and make decisions about which navigation strategy to use.

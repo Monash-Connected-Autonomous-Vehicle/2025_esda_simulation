@@ -306,22 +306,30 @@ class LaneDetectionFCNNode(LaneDetectionNode):
 
     def image_callback(self, msg):
         """
-        Override parent callback to render area-style FCN visualization while
-        keeping marker/cloud publishing pipeline unchanged.
+        Process incoming camera images using FCN lane extraction while keeping
+        the rest of the classic lane_detection.py pipeline intact.
         """
         self.get_logger().info('Image callback received', throttle_duration_sec=5.0)
         try:
+            # Convert ROS Image to OpenCV format
             cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
+            # Detect lanes using FCN mask + classic geometric filtering
             lines, white_mask, edges = self.detect_white_lanes(cv_image)
 
+            # Create visualization image
             viz_image = cv_image.copy()
+            detection_image = np.zeros_like(cv_image)
             self.latest_lines = []
 
             if lines and len(lines) > 0:
                 for line in lines:
                     x1, y1, x2, y2 = line
                     self.latest_lines.append(line)
+
+                    # Draw standard line overlay for debugging
+                    cv2.line(detection_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
                     if not self.fcn_draw_area:
                         cv2.line(viz_image, (x1, y1), (x2, y2), (0, 255, 0), 3)
 
@@ -332,18 +340,14 @@ class LaneDetectionFCNNode(LaneDetectionNode):
                 edges_colored = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
 
                 if self.fcn_draw_area:
-                    # left_view = self.draw_drivable_area_overlay(viz_image, white_mask)
-                    left_view = self.draw_drivable_area_overlay(
-                        viz_image,
-                        self.latest_lines
-                    )
+                    left_view = self.draw_drivable_area_overlay(viz_image, self.latest_lines)
                 else:
                     left_view = viz_image.copy()
 
                 right_view = self.latest_right_image.copy() if self.latest_right_image is not None else np.zeros_like(cv_image)
 
                 stereo_row = np.hstack([left_view, right_view])
-                processing_row = np.hstack([white_mask_colored, edges_colored])
+                processing_row = np.hstack([white_mask_colored, edges_colored if edges_colored is not None else detection_image])
                 combined = np.vstack([stereo_row, processing_row])
                 combined_resized = cv2.resize(combined, (1280, 720))
 
@@ -364,9 +368,10 @@ class LaneDetectionFCNNode(LaneDetectionNode):
                 cv2.waitKey(1)
 
             if lines and len(self.latest_lines) > 0:
+                # Convert to format expected by publish_lane_markers
                 lines_array = [[line] for line in self.latest_lines]
                 header = msg.header
-                header.frame_id = 'camera_link_optical'
+                header.frame_id = 'camera_link_optical'  # Use optical frame for projection
 
                 self.publish_lane_markers(lines_array, header)
 
@@ -374,6 +379,8 @@ class LaneDetectionFCNNode(LaneDetectionNode):
                     self.publish_obstacle_cloud(self.latest_lines, self.latest_depth_image, header)
                 else:
                     self.latest_3d_points = []
+            else:
+                self.latest_3d_points = []
 
         except Exception as e:
             self.get_logger().error(f'Error processing image: {str(e)}')

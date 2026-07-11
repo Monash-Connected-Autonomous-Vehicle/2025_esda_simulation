@@ -57,6 +57,7 @@ install(PROGRAMS
   scripts/follow_the_gap.py
   scripts/track_follower.py
   scripts/behaviour_tree.py
+  scripts/waypoint_navigator_recommendation.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

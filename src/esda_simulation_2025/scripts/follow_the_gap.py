@@ -111,6 +111,7 @@ class FollowTheGap(Node):
         self.declare_parameter('map_topic', '/map')
         self.declare_parameter('robot_frame', 'base_link')
         self.declare_parameter('frame_id', 'map')
+        self.declare_parameter('point_cloud_topic', '/point_cloud')
 
         # FTG tuning
         self.declare_parameter('disparity_threshold', 0.5)
@@ -213,7 +214,10 @@ class FollowTheGap(Node):
         self.get_logger().info(f'Safe distance threshold: {self.safe_distance:.3f} m')
 
     def is_within_lane(self, right_lane_parameters, left_lane_parameters):
+        # Used to confine the robot's navigation within the lane boundaries by checking if the robot's current position is within the lane defined by the right and left lane parameters. This can help improve safety and reliability by avoiding navigation towards gaps that lead outside of the lane boundaries.
         self.get_logger().info(f'Received lane parameters - Right lane: gradient={right_lane_parameters[0]:.3f}, x_intercept={right_lane_parameters[1]:.3f} | Left lane: gradient={left_lane_parameters[0]:.3f}, x_intercept={left_lane_parameters[1]:.3f}')
+
+        
 
         pass
     
@@ -338,6 +342,9 @@ class FollowTheGap(Node):
         self.map_origin_y = msg.info.origin.position.y
         self.map_data = np.array(msg.data, dtype=np.int16).reshape((self.map_height, self.map_width))
         self.latest_map = msg
+        
+        # This is used in conjunction with the LaserScan
+        
 
     def publish_cmd(self, linear_x, angular_z):
         cmd = Twist()

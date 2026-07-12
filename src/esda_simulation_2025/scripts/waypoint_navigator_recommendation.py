@@ -46,7 +46,7 @@ class WaypointNavigator(Node):
         )
 
         # Testing parameters
-        self.if_comment = True
+        self.if_comment = False
 
         # Basic Navigator object to handle navigation tasks
         self.navigator = BasicNavigator()
@@ -85,7 +85,7 @@ class WaypointNavigator(Node):
         self.map_data = msg
 
         if self.if_comment:
-            self.get_logger().info(f"Map data given by the SLAM algorithm: {self.map_data}")
+            self.get_logger().info(f"Map data received from SLAM (size: {self.map_data.info.width}x{self.map_data.info.height})")
 
 
     def navigate_to_waypoint(self, waypoint: PoseStamped):
@@ -159,7 +159,7 @@ class WaypointNavigator(Node):
         goal_pose.pose.position.y = map_point.point.y
         goal_pose.pose.position.z = 0.0
 
-        goal_pose.pose.orientation.w = 0.0
+        goal_pose.pose.orientation.w = 1.0
 
         self.get_logger().info(
             f"Sending goal 1m ahead: x={goal_pose.pose.position.x:.2f}, y={goal_pose.pose.position.y:.2f}"

@@ -122,6 +122,20 @@ class FollowTheGap(Node):
         self.declare_parameter('max_turn_rate', 1.5)
         self.declare_parameter('steering_gain', 0.8)
         self.declare_parameter('forward_bias_gain', 0.35)
+        
+        self.declare_parameter('obstacle_risk_distance', 1.6)
+        self.declare_parameter('gap_depth_weight_base', 0.8)
+        self.declare_parameter('gap_depth_weight_gain', 1.0)
+        self.declare_parameter('gap_width_weight_base', 0.015)
+        self.declare_parameter('gap_width_weight_gain', 0.02)
+        self.declare_parameter('angle_penalty_reduction', 0.7)
+        self.declare_parameter('angle_penalty_floor_scale', 0.35)
+        self.declare_parameter('min_ftg_confidence', 0.45)
+        self.declare_parameter('max_ftg_confidence', 1.0)
+        self.declare_parameter('lane_constraint_enabled', True)
+        self.declare_parameter('lane_projection_distance', 1.2)
+        self.declare_parameter('lane_boundary_margin', 0.12)
+        self.declare_parameter('lane_center_penalty_gain', 0.8)
         self.declare_parameter('recommendation_config', True) # Whether to publish recommendations to the behaviour tree node, can be set to False for testing the FTG algorithm in isolation without affecting the overall behaviour tree logic. This allows for more focused testing and debugging of the FTG algorithm itself or straight /cmd_vel commands, without needing to consider the interactions with the behaviour tree node
 
         # Weighting parameters
@@ -143,6 +157,19 @@ class FollowTheGap(Node):
         self.max_turn_rate = self.get_parameter('max_turn_rate').value
         self.steering_gain = self.get_parameter('steering_gain').value
         self.forward_bias_gain = self.get_parameter('forward_bias_gain').value
+        self.obstacle_risk_distance = self.get_parameter('obstacle_risk_distance').value
+        self.gap_depth_weight_base = self.get_parameter('gap_depth_weight_base').value
+        self.gap_depth_weight_gain = self.get_parameter('gap_depth_weight_gain').value
+        self.gap_width_weight_base = self.get_parameter('gap_width_weight_base').value
+        self.gap_width_weight_gain = self.get_parameter('gap_width_weight_gain').value
+        self.angle_penalty_reduction = self.get_parameter('angle_penalty_reduction').value
+        self.angle_penalty_floor_scale = self.get_parameter('angle_penalty_floor_scale').value
+        self.min_ftg_confidence = self.get_parameter('min_ftg_confidence').value
+        self.max_ftg_confidence = self.get_parameter('max_ftg_confidence').value
+        self.lane_constraint_enabled = self.get_parameter('lane_constraint_enabled').value
+        self.lane_projection_distance = self.get_parameter('lane_projection_distance').value
+        self.lane_boundary_margin = self.get_parameter('lane_boundary_margin').value
+        self.lane_center_penalty_gain = self.get_parameter('lane_center_penalty_gain').value
 
         robot_file = self.get_parameter('robot_description_file').get_parameter_value().string_value
         robot_xml = load_robot_xml(robot_file)
@@ -165,6 +192,14 @@ class FollowTheGap(Node):
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
+
+        self.left_lane_detected = False
+        self.right_lane_detected = False
+        self.left_lane_gradient = 0.0
+        self.left_lane_x_intercept = 0.0
+        self.right_lane_gradient = 0.0
+        self.right_lane_x_intercept = 0.0
+        self.lane_confidence = 0.0
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -213,13 +248,59 @@ class FollowTheGap(Node):
         self.get_logger().info(f'FTG safety radius: {self.ftg_safety_radius:.3f} m')
         self.get_logger().info(f'Safe distance threshold: {self.safe_distance:.3f} m')
 
-    def is_within_lane(self, right_lane_parameters, left_lane_parameters):
+    def is_within_lane(self, right_lane_parameters, left_lane_parameters, left_lane_detected=False, right_lane_detected=False, lane_confidence=0.0):
         # Used to confine the robot's navigation within the lane boundaries by checking if the robot's current position is within the lane defined by the right and left lane parameters. This can help improve safety and reliability by avoiding navigation towards gaps that lead outside of the lane boundaries.
-        self.get_logger().info(f'Received lane parameters - Right lane: gradient={right_lane_parameters[0]:.3f}, x_intercept={right_lane_parameters[1]:.3f} | Left lane: gradient={left_lane_parameters[0]:.3f}, x_intercept={left_lane_parameters[1]:.3f}')
+        self.right_lane_gradient = float(right_lane_parameters[0])
+        self.right_lane_x_intercept = float(right_lane_parameters[1])
+        self.left_lane_gradient = float(left_lane_parameters[0])
+        self.left_lane_x_intercept = float(left_lane_parameters[1])
+        self.left_lane_detected = bool(left_lane_detected)
+        self.right_lane_detected = bool(right_lane_detected)
+        self.lane_confidence = float(np.clip(lane_confidence, 0.0, 1.0))
 
-        
+    def lane_lateral_at_forward_distance(self, lane_gradient, lane_intercept, forward_distance):
+        return lane_gradient * forward_distance + lane_intercept
 
-        pass
+    def lane_confinement_check(self, gap_center_angle, gap_depth):
+        if not self.lane_constraint_enabled:
+            return True, 0.0
+
+        if not (self.left_lane_detected or self.right_lane_detected):
+            return True, 0.0
+
+        projection_distance = max(0.25, min(float(gap_depth), self.lane_projection_distance))
+        gap_lateral = projection_distance * math.sin(gap_center_angle)
+
+        lane_penalty = 0.0
+
+        if self.left_lane_detected:
+            left_bound = self.lane_lateral_at_forward_distance(
+                self.left_lane_gradient,
+                self.left_lane_x_intercept,
+                projection_distance
+            )
+            if gap_lateral > (left_bound - self.lane_boundary_margin):
+                return False, -1.0
+            lane_penalty += self.lane_center_penalty_gain * math.exp(-(left_bound - gap_lateral))
+
+        if self.right_lane_detected:
+            right_bound = self.lane_lateral_at_forward_distance(
+                self.right_lane_gradient,
+                self.right_lane_x_intercept,
+                projection_distance
+            )
+            if gap_lateral < (right_bound + self.lane_boundary_margin):
+                return False, -1.0
+            lane_penalty += self.lane_center_penalty_gain * math.exp(-(gap_lateral - right_bound))
+
+        if self.left_lane_detected and self.right_lane_detected:
+            center_line = 0.5 * (left_bound + right_bound)
+            half_width = max(0.05, 0.5 * (left_bound - right_bound))
+            center_offset = abs(gap_lateral - center_line) / half_width
+            lane_penalty += self.lane_center_penalty_gain * np.clip(center_offset, 0.0, 2.0)
+
+        confidence_scale = 0.3 + 0.7 * self.lane_confidence
+        return True, -confidence_scale * lane_penalty
     
     def lane_parameters_callback(self, msg):
         # This callback can be used to receive lane parameters from the track follower node, which can then be used to enhance the gap scoring by considering the lane information. For example, if the lane parameters indicate that the robot is close to the edge of the lane, the gap scoring can be adjusted to prefer gaps that are more centered within the lane, or to avoid gaps that lead towards the edge of the lane. This can help improve the safety and reliability of the navigation by leveraging the lane information provided by the track follower node.
@@ -227,8 +308,17 @@ class FollowTheGap(Node):
         right_lane_x_intercept = msg.right_lane_x_intercept
         left_lane_gradient = msg.left_lane_gradient
         left_lane_x_intercept = msg.left_lane_x_intercept
+        left_lane_detected = msg.left_lane_detected
+        right_lane_detected = msg.right_lane_detected
+        lane_confidence = msg.confidence
         
-        self.is_within_lane(right_lane_parameters=(right_lane_gradient, right_lane_x_intercept), left_lane_parameters=(left_lane_gradient, left_lane_x_intercept))
+        self.is_within_lane(
+            right_lane_parameters=(right_lane_gradient, right_lane_x_intercept),
+            left_lane_parameters=(left_lane_gradient, left_lane_x_intercept),
+            left_lane_detected=left_lane_detected,
+            right_lane_detected=right_lane_detected,
+            lane_confidence=lane_confidence
+        )
 
     def footprint_is_map_safe(self, yaw, max_distance=1.5, step=0.10):
         if self.latest_map is None:
@@ -332,6 +422,25 @@ class FollowTheGap(Node):
             d += step
 
         return score
+
+    def compute_obstacle_risk(self, forward_ranges):
+        if forward_ranges.size == 0:
+            return 0.0
+
+        risk_distance = max(self.safe_distance, self.obstacle_risk_distance)
+        near_ratio = float(np.mean(forward_ranges < risk_distance))
+        very_near_ratio = float(np.mean(forward_ranges < (0.75 * risk_distance)))
+
+        min_forward = float(np.min(forward_ranges))
+        proximity = np.clip((risk_distance - min_forward) / risk_distance, 0.0, 1.0)
+
+        obstacle_risk = np.clip(
+            0.5 * near_ratio + 0.3 * very_near_ratio + 0.2 * proximity,
+            0.0,
+            1.0
+        )
+
+        return float(obstacle_risk)
         
     def occupancy_grid_callback(self, msg):
         # Process occupancy grid data here if needed for the follow the gap algorithm, e.g., to evaluate gaps based on the occupancy grid information. This can be used to enhance the gap scoring by considering not only the LiDAR data but also the known map of the environment.
@@ -420,9 +529,16 @@ class FollowTheGap(Node):
 
         return extended_ranges
 
-    def score_gap(self, extended_ranges, safe_groups, forward_angles):
+    def score_gap(self, extended_ranges, safe_groups, forward_angles, obstacle_risk=0.0):
         best_score = -float('inf')
         best_gap = None
+
+        depth_weight = self.gap_depth_weight_base + self.gap_depth_weight_gain * obstacle_risk
+        width_weight = self.gap_width_weight_base + self.gap_width_weight_gain * obstacle_risk
+        angle_weight = self.forward_bias_gain * max(
+            self.angle_penalty_floor_scale,
+            1.0 - self.angle_penalty_reduction * obstacle_risk
+        )
 
         for is_safe, indices in safe_groups:
             if not is_safe or len(indices) == 0:
@@ -433,6 +549,10 @@ class FollowTheGap(Node):
             gap_depth = float(np.mean(extended_ranges[indices]))
             gap_width = len(indices)
 
+            lane_ok, lane_score = self.lane_confinement_check(gap_center_angle, gap_depth)
+            if not lane_ok:
+                continue
+
             world_yaw = wrap_to_pi(self.theta + gap_center_angle)
 
             if not self.footprint_is_map_safe(world_yaw, max_distance=min(gap_depth, 0.8), step=0.10):
@@ -441,9 +561,10 @@ class FollowTheGap(Node):
             map_score = self.score_map_ray(world_yaw, max_distance=min(gap_depth, 2.0), step=0.15)
 
             score = (
-                0.8 * gap_depth
-                + 0.015 * gap_width
-                - self.forward_bias_gain * abs(gap_center_angle)
+                depth_weight * gap_depth
+                + width_weight * gap_width
+                - angle_weight * abs(gap_center_angle)
+                + lane_score
                 + map_score
             )
 
@@ -539,6 +660,13 @@ class FollowTheGap(Node):
             self.stop_robot()
             return
 
+        obstacle_risk = self.compute_obstacle_risk(forward_ranges)
+        self.ftg_confidence_weight = np.clip(
+            self.min_ftg_confidence + (self.max_ftg_confidence - self.min_ftg_confidence) * obstacle_risk,
+            0.0,
+            1.0
+        )
+
         disparities = self.find_disparities(forward_ranges)
         extended_ranges = self.extend_disparity(forward_ranges, disparities, msg.angle_increment)
 
@@ -549,7 +677,7 @@ class FollowTheGap(Node):
             for key, group in groupby(enumerate(safe_mask), key=lambda x: x[1])
         ]
 
-        best_gap = self.score_gap(extended_ranges, safe_groups, forward_angles)
+        best_gap = self.score_gap(extended_ranges, safe_groups, forward_angles, obstacle_risk=obstacle_risk)
 
         self.get_logger().info(f'<DEBUG> Best gap: {best_gap}')
 
@@ -617,7 +745,7 @@ class FollowTheGap(Node):
             follow_the_gap_msg_recommendation = NavigationRecommendation()
             follow_the_gap_msg_recommendation.source = NavigationRecommendation.FOLLOW_THE_GAP
             follow_the_gap_msg_recommendation.valid = True
-            follow_the_gap_msg_recommendation.confidence = 1.0
+            follow_the_gap_msg_recommendation.confidence = float(self.ftg_confidence_weight)
             follow_the_gap_msg_recommendation.linear_x = linear_x
             follow_the_gap_msg_recommendation.angular_z = angular_z
             self.behaviour_tree_publisher.publish(follow_the_gap_msg_recommendation)

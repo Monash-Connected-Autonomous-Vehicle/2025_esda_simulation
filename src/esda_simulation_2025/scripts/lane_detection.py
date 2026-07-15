@@ -30,23 +30,39 @@ class LaneDetectionNode(Node):
         self.declare_parameter('publish_rate', 10.0)
         self.declare_parameter('white_threshold_low', 130)  # Grayscale threshold for white (more lenient)
         self.declare_parameter('white_threshold_high', 255)
+        self.declare_parameter('white_saturation_max', 70)
+        self.declare_parameter('white_value_min', 160)
+        self.declare_parameter('orange_hue_low', 5)
+        self.declare_parameter('orange_hue_high', 25)
+        self.declare_parameter('orange_saturation_min', 90)
+        self.declare_parameter('orange_value_min', 80)
+        self.declare_parameter('cone_reject_dilate_px', 7)
         self.declare_parameter('min_line_length', 30)  # Shorter to detect more lanes
         self.declare_parameter('max_line_gap', 40)  # Larger gap tolerance
         self.declare_parameter('min_lane_width', 15)  # Minimum lane width in pixels
         self.declare_parameter('max_lane_width', 200)  # Maximum lane width in pixels
         self.declare_parameter('lane_thickness_pixels', 8)  # Lane thickness for dense sampling
         self.declare_parameter('point_spacing_pixels', 2.0)  # Distance between sampled points
+        self.declare_parameter('profile_require_both_dark_sides', True)
         
         # Get parameters
         self.show_viz = self.get_parameter('show_visualization').value
         self.white_low = self.get_parameter('white_threshold_low').value
         self.white_high = self.get_parameter('white_threshold_high').value
+        self.white_sat_max = self.get_parameter('white_saturation_max').value
+        self.white_val_min = self.get_parameter('white_value_min').value
+        self.orange_h_low = self.get_parameter('orange_hue_low').value
+        self.orange_h_high = self.get_parameter('orange_hue_high').value
+        self.orange_sat_min = self.get_parameter('orange_saturation_min').value
+        self.orange_val_min = self.get_parameter('orange_value_min').value
+        self.cone_reject_dilate_px = self.get_parameter('cone_reject_dilate_px').value
         self.min_line_length = self.get_parameter('min_line_length').value
         self.max_line_gap = self.get_parameter('max_line_gap').value
         self.min_lane_width = self.get_parameter('min_lane_width').value
         self.max_lane_width = self.get_parameter('max_lane_width').value
         self.lane_thickness = self.get_parameter('lane_thickness_pixels').value
         self.point_spacing = self.get_parameter('point_spacing_pixels').value
+        self.profile_require_both_dark_sides = self.get_parameter('profile_require_both_dark_sides').value
         
         # CV Bridge for ROS-OpenCV conversion
         self.bridge = CvBridge()
@@ -233,6 +249,7 @@ class LaneDetectionNode(Node):
         """
         # Convert to grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         height, width = gray.shape
         
         # Restrict ROI to lower half of the image
@@ -245,10 +262,29 @@ class LaneDetectionNode(Node):
         ]], dtype=np.int32)
         cv2.fillPoly(roi_mask, roi_vertices, 255)
         gray_roi = cv2.bitwise_and(gray, roi_mask)
-        
-        # Threshold for white colors
-        # Balance noise and detection - use parameter value
-        _, white_mask = cv2.threshold(gray_roi, self.white_low, 255, cv2.THRESH_BINARY)
+
+        # White mask in HSV (white ~= low saturation, high value)
+        white_mask = cv2.inRange(
+            hsv,
+            np.array([0, 0, self.white_val_min], dtype=np.uint8),
+            np.array([180, self.white_sat_max, self.white_high], dtype=np.uint8)
+        )
+
+        # Cone mask in HSV (orange range)
+        orange_mask = cv2.inRange(
+            hsv,
+            np.array([self.orange_h_low, self.orange_sat_min, self.orange_val_min], dtype=np.uint8),
+            np.array([self.orange_h_high, 255, 255], dtype=np.uint8)
+        )
+
+        # Expand cone regions so white stripes attached to cone are rejected too
+        reject_px = int(max(1, self.cone_reject_dilate_px))
+        cone_kernel = np.ones((reject_px, reject_px), np.uint8)
+        orange_mask = cv2.dilate(orange_mask, cone_kernel, iterations=1)
+
+        # Remove white pixels near orange cones and apply ROI
+        white_mask = cv2.bitwise_and(white_mask, cv2.bitwise_not(orange_mask))
+        white_mask = cv2.bitwise_and(white_mask, roi_mask)
         
         # Apply morphological operations
         # Use 3x3 kernel for opening to preserve thin lane lines while removing tiny sparkles
@@ -330,14 +366,16 @@ class LaneDetectionNode(Node):
         is_dark_1 = self.is_pixel_dark(gray, p1x, p1y)
         is_dark_2 = self.is_pixel_dark(gray, p2x, p2y)
         
-        # Accept if at least one side is dark (less strict)
+        if self.profile_require_both_dark_sides:
+            return is_dark_1 and is_dark_2
+
         return is_dark_1 or is_dark_2
 
     def is_pixel_white(self, img, x, y):
         h, w = img.shape
         x, y = int(x), int(y)
         if 0 <= y < h and 0 <= x < w:
-            return img[y, x] > 120  # More lenient threshold
+            return img[y, x] > self.white_low
         return False
 
     def is_pixel_dark(self, img, x, y):

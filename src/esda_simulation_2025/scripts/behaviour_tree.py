@@ -216,6 +216,9 @@ class BehaviourTree(Node):
             self.current_state = NavigationState.RECOVERY    
             return
 
+        if self.latest_follow_the_gap_recommendation_msg is not None and self.latest_follow_the_gap_recommendation_msg.confidence > 0.4:
+            self.cone_nearby = True
+
         # Global near-obstacle override: always prioritize Follow The Gap when obstacle is near.
         if self.cone_nearby and self.current_state != NavigationState.FOLLOW_THE_GAP:
             self.get_logger().info(

@@ -421,7 +421,6 @@ class LaneDetectionNode(Node):
                 # Convert to format expected by publish_lane_markers
                 lines_array = [[line] for line in self.latest_lines]
                 header = msg.header
-                header.frame_id = 'camera_link_optical' # Use the optical frame for projection
                 
                 self.publish_lane_markers(lines_array, header)
                 
@@ -611,6 +610,24 @@ class LaneDetectionNode(Node):
         camera_height = 0.315
         camera_pitch = 0.0
 
+        # Get transform to global frame (with timeout to avoid blocking)
+        target_frame = 'base_link'
+        transform = None
+        try:
+            # Use a recent timestamp instead of current to avoid "future" errors
+            transform = self.tf_buffer.lookup_transform_full(
+                target_frame,
+                rclpy.time.Time(),
+                'camera_link_optical',
+                rclpy.time.Time(),
+                'base_link',
+                timeout=rclpy.duration.Duration(seconds=0.01)  # 10ms timeout
+            )
+        except TransformException:
+            # Skip publishing if transform not available - avoids lag
+            self.get_logger().debug('No transform available, skipping marker publish', throttle_duration_sec=5.0)
+            return
+
         marker_id = 0
 
         for line in lines:
@@ -670,6 +687,19 @@ class LaneDetectionNode(Node):
                 if x_3d is None:
                     continue
 
+                # Transform to global frame if available
+                if transform:
+                    point_stamped = PointStamped()
+                    point_stamped.header.frame_id = 'camera_link_optical'
+                    point_stamped.point.x = x_3d
+                    point_stamped.point.y = y_3d
+                    point_stamped.point.z = z_3d
+                    
+                    point_transformed = do_transform_point(point_stamped, transform)
+                    x_3d = point_transformed.point.x
+                    y_3d = point_transformed.point.y
+                    z_3d = point_transformed.point.z
+
                 # Store point for control logic
                 point = (x_3d, y_3d, z_3d)
                 if is_left_lane:
@@ -678,7 +708,8 @@ class LaneDetectionNode(Node):
                     self.right_lane_points.append(point)
 
                 marker = Marker()
-                marker.header = header
+                marker.header.frame_id = target_frame
+                marker.header.stamp = header.stamp
                 marker.id = marker_id
                 marker.type = Marker.CUBE
                 marker.action = Marker.ADD

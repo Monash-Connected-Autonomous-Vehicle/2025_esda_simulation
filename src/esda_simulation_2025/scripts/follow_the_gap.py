@@ -111,7 +111,6 @@ class FollowTheGap(Node):
         self.declare_parameter('map_topic', '/map')
         self.declare_parameter('robot_frame', 'base_link')
         self.declare_parameter('frame_id', 'map')
-        self.declare_parameter('point_cloud_topic', '/point_cloud')
 
         # FTG tuning
         self.declare_parameter('disparity_threshold', 0.5)
@@ -451,9 +450,6 @@ class FollowTheGap(Node):
         self.map_origin_y = msg.info.origin.position.y
         self.map_data = np.array(msg.data, dtype=np.int16).reshape((self.map_height, self.map_width))
         self.latest_map = msg
-        
-        # This is used in conjunction with the LaserScan
-        
 
     def publish_cmd(self, linear_x, angular_z):
         cmd = Twist()

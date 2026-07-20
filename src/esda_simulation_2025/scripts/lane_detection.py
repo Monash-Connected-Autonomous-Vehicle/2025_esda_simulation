@@ -9,14 +9,13 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import Image, PointCloud2, PointField, LaserScan
-from geometry_msgs.msg import PoseStamped, PointStamped, Point
+from geometry_msgs.msg import PoseStamped, PointStamped
 from visualization_msgs.msg import Marker, MarkerArray
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import struct
 import math
-import time
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
@@ -37,12 +36,6 @@ class LaneDetectionNode(Node):
         self.declare_parameter('max_lane_width', 200)  # Maximum lane width in pixels
         self.declare_parameter('lane_thickness_pixels', 8)  # Lane thickness for dense sampling
         self.declare_parameter('point_spacing_pixels', 2.0)  # Distance between sampled points
-        self.declare_parameter('marker_publish_hz', 5.0)  # RViz marker publish rate cap
-        self.declare_parameter('cloud_publish_hz', 4.0)   # PointCloud publish rate cap
-        self.declare_parameter('max_markers_per_frame', 120)  # Hard cap on marker count
-        self.declare_parameter('max_cloud_points', 350)  # Hard cap on point cloud size
-        self.declare_parameter('process_every_n_frames', 2)  # Skip frames to reduce load
-        self.declare_parameter('max_lines_to_project', 8)  # Limit lines converted to 3D
         
         # Get parameters
         self.show_viz = self.get_parameter('show_visualization').value
@@ -54,12 +47,6 @@ class LaneDetectionNode(Node):
         self.max_lane_width = self.get_parameter('max_lane_width').value
         self.lane_thickness = self.get_parameter('lane_thickness_pixels').value
         self.point_spacing = self.get_parameter('point_spacing_pixels').value
-        self.marker_publish_hz = float(self.get_parameter('marker_publish_hz').value)
-        self.cloud_publish_hz = float(self.get_parameter('cloud_publish_hz').value)
-        self.max_markers_per_frame = int(self.get_parameter('max_markers_per_frame').value)
-        self.max_cloud_points = int(self.get_parameter('max_cloud_points').value)
-        self.process_every_n_frames = max(1, int(self.get_parameter('process_every_n_frames').value))
-        self.max_lines_to_project = max(1, int(self.get_parameter('max_lines_to_project').value))
         
         # CV Bridge for ROS-OpenCV conversion
         self.bridge = CvBridge()
@@ -130,18 +117,11 @@ class LaneDetectionNode(Node):
         self.latest_right_image = None
         self.latest_lines = []
         self.latest_3d_points = [] # Store detected points in camera frame
-        self.last_marker_publish_time = 0.0
-        self.last_cloud_publish_time = 0.0
-        self.frame_count = 0
         
         self.get_logger().info('Lane Detection Node initialized (Stereo Mode)')
         self.get_logger().info(f'Subscribing to: /camera/left/image_raw, /camera/right/image_raw, /camera/depth/image_raw')
         self.get_logger().info(f'Publishing to: /lane_markers, /lane_obstacles, /scan_fused')
         self.get_logger().info(f'Show visualization: {self.show_viz}')
-        self.get_logger().info(f'Marker hz cap={self.marker_publish_hz}, Cloud hz cap={self.cloud_publish_hz}, '
-                       f'Max markers/frame={self.max_markers_per_frame}, Max cloud points={self.max_cloud_points}')
-        self.get_logger().info(f'Process every N frames={self.process_every_n_frames}, '
-                       f'Max lines to project={self.max_lines_to_project}')
     
     def right_image_callback(self, msg):
         """Store the latest right image for stereo visualization"""
@@ -371,10 +351,6 @@ class LaneDetectionNode(Node):
         """
         Process incoming camera images
         """
-        self.frame_count += 1
-        if (self.frame_count % self.process_every_n_frames) != 0:
-            return
-
         self.get_logger().info('Image callback received', throttle_duration_sec=5.0)
         try:
             # Convert ROS Image to OpenCV format
@@ -442,25 +418,16 @@ class LaneDetectionNode(Node):
             
             # Publish markers for detected lanes
             if lines and len(self.latest_lines) > 0:
-                selected_lines = self.latest_lines[:self.max_lines_to_project]
                 # Convert to format expected by publish_lane_markers
-                lines_array = [[line] for line in selected_lines]
+                lines_array = [[line] for line in self.latest_lines]
                 header = msg.header
                 header.frame_id = 'camera_link_optical' # Use the optical frame for projection
-
-                now = time.time()
-                marker_period = (1.0 / self.marker_publish_hz) if self.marker_publish_hz > 0.0 else 0.0
-                cloud_period = (1.0 / self.cloud_publish_hz) if self.cloud_publish_hz > 0.0 else 0.0
-
-                if marker_period == 0.0 or (now - self.last_marker_publish_time) >= marker_period:
-                    self.publish_lane_markers(lines_array, header)
-                    self.last_marker_publish_time = now
-
+                
+                self.publish_lane_markers(lines_array, header)
+                
                 # Also publish to PointCloud for Nav2 costmap
                 if self.latest_depth_image is not None:
-                    if cloud_period == 0.0 or (now - self.last_cloud_publish_time) >= cloud_period:
-                        self.publish_obstacle_cloud(selected_lines, self.latest_depth_image, header)
-                        self.last_cloud_publish_time = now
+                    self.publish_obstacle_cloud(self.latest_lines, self.latest_depth_image, header)
                 else:
                     self.latest_3d_points = []
                 
@@ -600,12 +567,6 @@ class LaneDetectionNode(Node):
             self.get_logger().warn('No valid 3D points generated from lanes', throttle_duration_sec=5.0)
             return
 
-        # Downsample to keep publish payload bounded
-        if len(points) > self.max_cloud_points and self.max_cloud_points > 0:
-            stride = max(1, int(math.ceil(len(points) / float(self.max_cloud_points))))
-            points = points[::stride]
-            self.latest_3d_points = self.latest_3d_points[::stride]
-
         # Create PointCloud2 message
         msg = PointCloud2()
         msg.header = header # Use same header/frame as camera
@@ -649,9 +610,8 @@ class LaneDetectionNode(Node):
         cy = 240
         camera_height = 0.315
         camera_pitch = 0.0
-        left_marker_points = []
-        right_marker_points = []
-        sampled_points = 0
+
+        marker_id = 0
 
         for line in lines:
             line = line[0]   # Unwrap
@@ -669,11 +629,9 @@ class LaneDetectionNode(Node):
             if line_len < 1.0:
                 continue
 
-            num_markers = max(int(line_len / 12.0), 2)
+            num_markers = max(int(line_len / 5.0), 2)
 
             for t in np.linspace(0, 1, num_markers):
-                if self.max_markers_per_frame > 0 and sampled_points >= self.max_markers_per_frame:
-                    break
                 u = int(x1 + t * dx)
                 v = int(y1 + t * dy)
 
@@ -716,61 +674,41 @@ class LaneDetectionNode(Node):
                 point = (x_3d, y_3d, z_3d)
                 if is_left_lane:
                     self.left_lane_points.append(point)
-                    p = Point()
-                    p.x = x_3d
-                    p.y = y_3d
-                    p.z = z_3d
-                    left_marker_points.append(p)
                 else:
                     self.right_lane_points.append(point)
-                    p = Point()
-                    p.x = x_3d
-                    p.y = y_3d
-                    p.z = z_3d
-                    right_marker_points.append(p)
 
-                sampled_points += 1
+                marker = Marker()
+                marker.header = header
+                marker.id = marker_id
+                marker.type = Marker.CUBE
+                marker.action = Marker.ADD
 
-            if self.max_markers_per_frame > 0 and sampled_points >= self.max_markers_per_frame:
-                break
+                if is_left_lane:
+                    marker.ns = 'left_lane'
+                    marker.color.r = 0.0
+                    marker.color.g = 1.0
+                    marker.color.b = 0.0
+                else:
+                    marker.ns = 'right_lane'
+                    marker.color.r = 1.0
+                    marker.color.g = 1.0
+                    marker.color.b = 0.0
 
-        if left_marker_points:
-            left_marker = Marker()
-            left_marker.header = header
-            left_marker.ns = 'left_lane'
-            left_marker.id = 0
-            left_marker.type = Marker.POINTS
-            left_marker.action = Marker.ADD
-            left_marker.pose.orientation.w = 1.0
-            left_marker.scale.x = 0.09
-            left_marker.scale.y = 0.09
-            left_marker.color.r = 0.0
-            left_marker.color.g = 1.0
-            left_marker.color.b = 0.0
-            left_marker.color.a = 0.9
-            left_marker.lifetime.sec = 0
-            left_marker.lifetime.nanosec = 500000000
-            left_marker.points = left_marker_points
-            marker_array.markers.append(left_marker)
+                marker.pose.position.x = x_3d
+                marker.pose.position.y = y_3d
+                marker.pose.position.z = z_3d
+                marker.pose.orientation.w = 1.0
 
-        if right_marker_points:
-            right_marker = Marker()
-            right_marker.header = header
-            right_marker.ns = 'right_lane'
-            right_marker.id = 1
-            right_marker.type = Marker.POINTS
-            right_marker.action = Marker.ADD
-            right_marker.pose.orientation.w = 1.0
-            right_marker.scale.x = 0.09
-            right_marker.scale.y = 0.09
-            right_marker.color.r = 1.0
-            right_marker.color.g = 1.0
-            right_marker.color.b = 0.0
-            right_marker.color.a = 0.9
-            right_marker.lifetime.sec = 0
-            right_marker.lifetime.nanosec = 500000000
-            right_marker.points = right_marker_points
-            marker_array.markers.append(right_marker)
+                marker.scale.x = 0.08
+                marker.scale.y = 0.08
+                marker.scale.z = 0.05
+                marker.color.a = 0.9
+
+                marker.lifetime.sec = 0
+                marker.lifetime.nanosec = 500000000
+
+                marker_array.markers.append(marker)
+                marker_id += 1
 
         self.marker_pub.publish(marker_array)
     

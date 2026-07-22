@@ -80,6 +80,7 @@ class WaypointNavigator(Node):
         self.sent_goal = False # Flag to indicate if the goal has been sent to the navigation stack
         self.goal_timer = self.create_timer(1.0, self.send_goal_once) # Timer to send the goal to the navigation stack
 
+        self.waypoints = []
 
     def map_callback(self, msg: OccupancyGrid):
         self.map_data = msg

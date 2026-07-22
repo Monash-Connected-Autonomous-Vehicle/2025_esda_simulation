@@ -336,7 +336,7 @@ class BehaviourTree(Node):
             self.get_logger().info('In recovery state, attempting to get unstuck or handle unexpected situation')
             
             # Move forward slowly while gently rotating to find a clear path
-            self.publish_cmd_vel(0.08, 0.15)
+            self.publish_cmd_vel(0.08, 0.05)
 
             # Try to escape recovery if valid recommendations come back
             if self.latest_follow_the_gap_recommendation_msg is not None and self.latest_follow_the_gap_recommendation_msg.valid:

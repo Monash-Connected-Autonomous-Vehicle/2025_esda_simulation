@@ -477,6 +477,12 @@ class TrackFollower(Node):
             ))
 
         return centreline
+    
+    # TODO: Implement the logic to follow the computed centreline
+    def follow_track(self):
+        # This method sees the best continuous lane and tries to maintain / confine the robot towards it
+        left_lane_points = self.left_lane
+        right_lane_points = self.right_lane
 
 def main(args=None):
     rclpy.init(args=args)

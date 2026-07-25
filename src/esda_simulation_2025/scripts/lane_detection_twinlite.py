@@ -21,7 +21,7 @@ from collections import deque
 import cv2
 import numpy as np
 import rclpy
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import Image
@@ -99,6 +99,14 @@ class LaneDetectionTwinLiteNode(LaneDetectionNode):
 
         self.recent_lane_probs = deque(maxlen=max(self.twinlite_temporal_window, 1))
 
+        self.last_valid_lines = []
+        self.last_valid_line_time = self.get_clock().now()
+
+        # Continue publishing the previous valid lanes for 0.75 seconds
+        # when one TwinLite/Hough frame temporarily fails.
+        self.lane_hold_time = 0.75
+        self.last_valid_line_time = self.get_clock().now()
+
         # Route the image subscription to its own reentrant callback group so a
         # slow forward pass can never block scan_callback's TF lookup and
         # /scan_fused republish -- that path feeds the Nav2 costmap, so stalling
@@ -110,19 +118,19 @@ class LaneDetectionTwinLiteNode(LaneDetectionNode):
         self.get_logger().info('TwinLiteNet+ lane detection override active (original lane_detection.py unchanged)')
 
     def _reroute_image_subscription(self):
-        self.inference_callback_group = ReentrantCallbackGroup()
-        reliable_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
+        self.inference_callback_group = MutuallyExclusiveCallbackGroup()
+        image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=10
+            depth=1
         )
         self.destroy_subscription(self.image_sub)
         self.image_sub = self.create_subscription(
             Image,
             '/camera/left/image_raw',
             self.image_callback,
-            reliable_qos,
+            image_qos,
             callback_group=self.inference_callback_group
         )
 
@@ -388,6 +396,8 @@ class LaneDetectionTwinLiteNode(LaneDetectionNode):
                     int(y2)
                 ])
 
+        
+
         self.get_logger().info(
             f'TwinLite mask pixels={cv2.countNonZero(lane_mask)}, '
             f'Hough lines={len(twinlite_lines)}',
@@ -425,16 +435,59 @@ class LaneDetectionTwinLiteNode(LaneDetectionNode):
 
             viz_image = cv_image.copy()
             detection_image = np.zeros_like(cv_image)
-            self.latest_lines = []
 
-            if lines and len(lines) > 0:
-                for line in lines:
-                    x1, y1, x2, y2 = line
-                    self.latest_lines.append(line)
-                    cv2.line(detection_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.line(viz_image, (x1, y1), (x2, y2), (0, 255, 0), 3)
+            now = self.get_clock().now()
 
-                self.get_logger().info(f'Detected {len(lines)} lane segments', throttle_duration_sec=2.0)
+            # A valid detection occurred.
+            if lines is not None and len(lines) > 0:
+                self.latest_lines = list(lines)
+                self.last_valid_lines = list(lines)
+                self.last_valid_line_time = now
+
+            # Detection failed for this frame.
+            else:
+                time_since_valid = (
+                    now - self.last_valid_line_time
+                ).nanoseconds / 1e9
+
+                # Keep publishing the previous lanes briefly instead of blinking.
+                if self.last_valid_lines and time_since_valid < self.lane_hold_time:
+                    self.latest_lines = list(self.last_valid_lines)
+
+                    self.get_logger().warning(
+                        'No lanes this frame; holding previous lane markers',
+                        throttle_duration_sec=1.0
+                    )
+                else:
+                    self.latest_lines = []
+
+            # Draw whichever lines will actually be published.
+            for line in self.latest_lines:
+                x1, y1, x2, y2 = line
+
+                cv2.line(
+                    detection_image,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 255, 0),
+                    2
+                )
+
+                cv2.line(
+                    viz_image,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 255, 0),
+                    3
+                )
+                # cv2.line(detection_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                # cv2.line(viz_image, (x1, y1), (x2, y2), (0, 255, 0), 3)
+
+                # self.get_logger().info(f'Detected {len(lines)} lane segments', throttle_duration_sec=2.0)
+            self.get_logger().info(
+                f'Publishing {len(self.latest_lines)} lane segments',
+                throttle_duration_sec=2.0
+            )
 
             if self.show_viz:
                 lane_mask_colored = cv2.cvtColor(lane_mask, cv2.COLOR_GRAY2BGR)
@@ -496,8 +549,11 @@ class LaneDetectionTwinLiteNode(LaneDetectionNode):
             if len(self.latest_lines) > 0:
                 lines_array = [[line] for line in self.latest_lines]
 
-                header = msg.header
+                from std_msgs.msg import Header
+
+                header = Header()
                 header.frame_id = 'camera_link_optical'
+                header.stamp = self.get_clock().now().to_msg()
 
                 self.publish_lane_markers(
                     lines_array,

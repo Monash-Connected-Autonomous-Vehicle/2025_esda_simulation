@@ -171,6 +171,9 @@ class WaypointNavigator(Node):
     def filter_clusters(self):
         pass
 
+    def create_local_waypoints(self):
+        pass
+
 
 if __name__ == '__main__':
     # import rclpy

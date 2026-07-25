@@ -123,7 +123,7 @@ class SimManager(ctk.CTk):
         self.lane_mode_dropdown = ctk.CTkOptionMenu(
             self.sim_frame,
             variable=self.lane_detector_mode,
-            values=["Regular", "FCN"],
+            values=["Regular", "FCN", "TwinLiteNet+"],
             width=130,
             fg_color=self.bg_dark,
             button_color=self.accent_purple,
@@ -133,6 +133,9 @@ class SimManager(ctk.CTk):
 
         self.sim_button = ctk.CTkButton(self.sim_frame, text="2. Launch Simulation", command=self.toggle_sim, font=("Orbitron", 16, "bold"), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
         self.sim_button.grid(row=0, column=3, padx=10, pady=6, sticky="e")
+
+        self.lane_detection_button = ctk.CTkButton(self.sim_frame, text="Launch Lane Detection", command=self.toggle_lane_detection, font=("Orbitron", 13, "bold"), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
+        self.lane_detection_button.grid(row=1, column=0, columnspan=4, padx=10, pady=(0, 8), sticky="ew")
 
         # Remove SLAM Options Section (now merged)
 
@@ -201,7 +204,7 @@ class SimManager(ctk.CTk):
             "NAV": self.nav_button.cget("fg_color"),
             "RVIZ": self.rviz_button.cget("fg_color"),
             "TELEOP": self.teleop_button.cget("fg_color"),
-            "LANE": self.slam_button.cget("fg_color")
+            "LANE": self.lane_detection_button.cget("fg_color")
         }
 
     def scan_world_files(self):
@@ -315,9 +318,7 @@ class SimManager(ctk.CTk):
         elif name == "NAV": self.nav_button.configure(fg_color=color)
         elif name == "RVIZ": self.rviz_button.configure(fg_color=color)
         elif name == "TELEOP": self.teleop_button.configure(fg_color=color)
-        elif name == "LANE":
-            # Lane detection doesn't have its own button, just update status
-            pass
+        elif name == "LANE": self.lane_detection_button.configure(fg_color=color)
 
     def check_xterm(self):
         """Check if xterm is installed"""
@@ -409,19 +410,38 @@ class SimManager(ctk.CTk):
     def _launch_slam_delayed(self, cmd):
         time.sleep(3)  # Wait for simulation to be ready
         self.run_in_terminal("SLAM", cmd)
-        
-        # Launch lane detection if enabled
-        if self.lane_detection_var.get():
-            time.sleep(2)  # Give SLAM time to start
-            if self.lane_detector_mode.get() == "FCN":
-                model_path = f"{self.workspace_root}/lane-detection-on-rural-roads-master/CS542_Project/Code/FCN_model.h5"
-                lane_cmd = (
-                    f"ros2 run esda_simulation_2025 lane_detection_FCN.py "
-                    f"--ros-args -p fcn_model_path:={model_path}"
-                )
-            else:
-                lane_cmd = "ros2 run esda_simulation_2025 lane_detection.py"
-            self.run_in_terminal("LANE", lane_cmd)
+
+    def toggle_lane_detection(self):
+        """Launch (or stop, if already running) the lane detection node standalone.
+
+        Independent of SLAM/AMCL/Nav2 - the "Enable Lane Detection" checkbox still
+        controls whether those modules are pointed at /scan_fused vs /scan, but
+        actually starting the detector is a separate, explicit action here.
+        """
+        if not self.is_sim_running():
+            self.status_label.configure(text="Error: Launch Simulation first!", text_color="#E74C3C")
+            return
+
+        mode = self.lane_detector_mode.get()
+        if mode == "FCN":
+            model_path = f"{self.workspace_root}/lane-detection-on-rural-roads-master/CS542_Project/Code/FCN_model.h5"
+            lane_cmd = (
+                f"ros2 run esda_simulation_2025 lane_detection_FCN.py "
+                f"--ros-args -p fcn_model_path:={model_path}"
+            )
+        elif mode == "TwinLiteNet+":
+            repo_path = f"{self.workspace_root}/TwinLiteNetPlus"
+            weight_path = f"{repo_path}/pretrained/nano.pth"
+            lane_cmd = (
+                f"ros2 run esda_simulation_2025 lane_detection_twinlite.py "
+                f"--ros-args -p twinlite_repo_path:={repo_path} "
+                f"-p twinlite_weight_path:={weight_path} "
+                f"-p twinlite_variant:=nano"
+            )
+        else:
+            lane_cmd = "ros2 run esda_simulation_2025 lane_detection.py"
+
+        self.run_in_terminal("LANE", lane_cmd)
 
     def toggle_amcl(self):
         if not self.is_sim_running():
@@ -530,6 +550,14 @@ class SimManager(ctk.CTk):
         subprocess.run("pkill -9 -f 'gz sim' 2>/dev/null", shell=True)
         subprocess.run("pkill -9 -f ign 2>/dev/null", shell=True)
         subprocess.run("pkill -9 -f gazebo 2>/dev/null", shell=True)
+        # Kill lane detection processes by command-line pattern, not just self.processes.
+        # If the UI was restarted while one was running, it's no longer tracked in
+        # self.processes but the xterm/bash/ros2 node tree is still alive and eating
+        # CPU -- this matches on all three (xterm's -e argument embeds the same
+        # command string), so it kills the whole tree regardless of tracking state.
+        subprocess.run("pkill -9 -f lane_detection.py 2>/dev/null", shell=True)
+        subprocess.run("pkill -9 -f lane_detection_FCN.py 2>/dev/null", shell=True)
+        subprocess.run("pkill -9 -f lane_detection_twinlite.py 2>/dev/null", shell=True)
         # Clean up shared memory segments that often cause FastDDS errors
         subprocess.run("rm -rf /dev/shm/fastrtps_* /dev/shm/sem.* 2>/dev/null", shell=True)
         # Kill our managed processes

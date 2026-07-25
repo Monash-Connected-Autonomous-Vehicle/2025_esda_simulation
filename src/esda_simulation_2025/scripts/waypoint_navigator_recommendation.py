@@ -172,6 +172,7 @@ class WaypointNavigator(Node):
         pass
 
     def create_local_waypoints(self):
+        
         pass
 
 

@@ -240,73 +240,162 @@ class LaneDetectionTwinLiteNode(LaneDetectionNode):
         torch = self.torch
         h_img, w_img = image.shape[:2]
 
-        letterboxed, (pad_w, pad_h) = _letterbox_for_img(image, new_shape=self.twinlite_img_size, auto=True)
+        letterboxed, (pad_w, pad_h) = _letterbox_for_img(
+            image,
+            new_shape=self.twinlite_img_size,
+            auto=True
+        )
+
         rgb = letterboxed[:, :, ::-1]
         chw = np.ascontiguousarray(rgb.transpose(2, 0, 1))
-        tensor = torch.from_numpy(chw).float().div(255.0).unsqueeze(0).to(self.twinlite_device)
-        padded_h, padded_w = tensor.shape[2], tensor.shape[3]
-        pad_w_i, pad_h_i = int(pad_w), int(pad_h)
+
+        tensor = (
+            torch.from_numpy(chw)
+            .float()
+            .div(255.0)
+            .unsqueeze(0)
+            .to(self.twinlite_device)
+        )
+
+        padded_h = tensor.shape[2]
+        padded_w = tensor.shape[3]
+
+        pad_w_i = int(pad_w)
+        pad_h_i = int(pad_h)
+
+        y_end = padded_h - pad_h_i if pad_h_i > 0 else padded_h
+        x_end = padded_w - pad_w_i if pad_w_i > 0 else padded_w
 
         with torch.no_grad():
             da_logits, ll_logits = self.twinlite_model(tensor)
 
-            ll_crop = ll_logits[:, :, pad_h_i:padded_h - pad_h_i, pad_w_i:padded_w - pad_w_i]
+            ll_crop = ll_logits[
+                :,
+                :,
+                pad_h_i:y_end,
+                pad_w_i:x_end
+            ]
+
             ll_up = torch.nn.functional.interpolate(
-                ll_crop, size=(h_img, w_img), mode='bilinear', align_corners=False
+                ll_crop,
+                size=(h_img, w_img),
+                mode='bilinear',
+                align_corners=False
             )
-            lane_prob = torch.softmax(ll_up, dim=1)[0, 1].cpu().numpy()
+
+            lane_prob = (
+                torch.softmax(ll_up, dim=1)[0, 1]
+                .detach()
+                .cpu()
+                .numpy()
+            )
 
             if self.twinlite_draw_area:
-                da_crop = da_logits[:, :, pad_h_i:padded_h - pad_h_i, pad_w_i:padded_w - pad_w_i]
+                da_crop = da_logits[
+                    :,
+                    :,
+                    pad_h_i:y_end,
+                    pad_w_i:x_end
+                ]
+
                 da_up = torch.nn.functional.interpolate(
-                    da_crop, size=(h_img, w_img), mode='bilinear', align_corners=False
+                    da_crop,
+                    size=(h_img, w_img),
+                    mode='bilinear',
+                    align_corners=False
                 )
-                self._latest_da_mask = (torch.argmax(da_up, dim=1)[0].cpu().numpy() > 0).astype(np.uint8) * 255
+
+                self._latest_da_mask = (
+                    torch.argmax(da_up, dim=1)[0]
+                    .detach()
+                    .cpu()
+                    .numpy() > 0
+                ).astype(np.uint8) * 255
+
             else:
                 self._latest_da_mask = None
 
-        # Temporal averaging over the raw probability field (not the thresholded
-        # mask) so the lane keeps tracking smoothly across frames rather than
-        # flickering in/out at the confidence boundary.
+        # Temporal smoothing
         self.recent_lane_probs.append(lane_prob)
-        lane_prob_avg = np.mean(np.stack(list(self.recent_lane_probs), axis=0), axis=0)
-        lane_mask = (lane_prob_avg >= self.twinlite_lane_confidence).astype(np.uint8) * 255
 
-        # TwinLiteNet+ already outputs a spatially-aware segmentation, so unlike
-        # the FCN node this doesn't need a manual ROI trapezoid or horizontal-blob
-        # suppression -- just clean up speckle before edge/line extraction.
+        lane_prob_avg = np.mean(
+            np.stack(list(self.recent_lane_probs), axis=0),
+            axis=0
+        )
+
+        lane_mask = (
+            lane_prob_avg >= self.twinlite_lane_confidence
+        ).astype(np.uint8) * 255
+
+        # Clean the segmentation mask
         kernel = np.ones((3, 3), np.uint8)
-        lane_mask = cv2.morphologyEx(lane_mask, cv2.MORPH_OPEN, kernel)
-        lane_mask = cv2.morphologyEx(lane_mask, cv2.MORPH_CLOSE, kernel)
 
-        edges = cv2.Canny(lane_mask, 40, 120)
-        lines = cv2.HoughLinesP(
+        lane_mask = cv2.morphologyEx(
+            lane_mask,
+            cv2.MORPH_OPEN,
+            kernel
+        )
+
+        lane_mask = cv2.morphologyEx(
+            lane_mask,
+            cv2.MORPH_CLOSE,
+            kernel
+        )
+
+        # Ignore upper image region
+        roi_mask = lane_mask.copy()
+        roi_top = int(0.30 * h_img)
+        roi_mask[:roi_top, :] = 0
+
+        edges = cv2.Canny(
+            roi_mask,
+            30,
+            100
+        )
+
+        hough_lines = cv2.HoughLinesP(
             edges,
             rho=1,
             theta=np.pi / 180,
-            threshold=12,
-            minLineLength=self.min_line_length,
-            maxLineGap=self.max_line_gap
+            threshold=8,
+            minLineLength=8,
+            maxLineGap=30
         )
 
-        filtered_lines = []
-        if lines is not None:
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-                dx, dy = x2 - x1, y2 - y1
-                angle = 90.0 if dx == 0 else abs(np.degrees(np.arctan2(dy, dx)))
-                # Reject mostly-horizontal map/wall edges
-                if angle < 12.0:
+        twinlite_lines = []
+
+        if hough_lines is not None:
+            for detected_line in hough_lines:
+                x1, y1, x2, y2 = detected_line[0]
+
+                dx = x2 - x1
+                dy = y2 - y1
+
+                angle = (
+                    90.0
+                    if dx == 0
+                    else abs(np.degrees(np.arctan2(dy, dx)))
+                )
+
+                # Only reject lines that are almost horizontal
+                if angle < 5.0:
                     continue
-                filtered_lines.append([x1, y1, x2, y2])
 
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        valid_lines = self.filter_valid_lanes(
-            np.array([[line] for line in filtered_lines], dtype=np.int32),
-            gray, h_img, w_img
-        ) if len(filtered_lines) > 0 else []
+                twinlite_lines.append([
+                    int(x1),
+                    int(y1),
+                    int(x2),
+                    int(y2)
+                ])
 
-        return valid_lines, lane_mask, edges
+        self.get_logger().info(
+            f'TwinLite mask pixels={cv2.countNonZero(lane_mask)}, '
+            f'Hough lines={len(twinlite_lines)}',
+            throttle_duration_sec=2.0
+        )
+
+        # Important: no classical filter_valid_lanes() here.
+        return twinlite_lines, lane_mask, edges
 
     def draw_drivable_area_overlay(self, image, da_mask):
         if da_mask is None:
@@ -404,12 +493,16 @@ class LaneDetectionTwinLiteNode(LaneDetectionNode):
                 cv2.imshow('Lane Detection - ESDA STEREO (TwinLiteNet+)', canvas)
                 cv2.waitKey(1)
 
-            if lines and len(self.latest_lines) > 0:
+            if len(self.latest_lines) > 0:
                 lines_array = [[line] for line in self.latest_lines]
-                header = msg.header
-                header.frame_id = 'camera_link_optical'  # Use optical frame for projection
 
-                self.publish_lane_markers(lines_array, header)
+                header = msg.header
+                header.frame_id = 'camera_link_optical'
+
+                self.publish_lane_markers(
+                    lines_array,
+                    header
+                )
 
                 if self.latest_depth_image is not None:
                     self.publish_obstacle_cloud(self.latest_lines, self.latest_depth_image, header)
@@ -443,3 +536,4 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+

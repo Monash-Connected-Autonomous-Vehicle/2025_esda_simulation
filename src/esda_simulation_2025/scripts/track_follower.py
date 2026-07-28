@@ -296,10 +296,10 @@ class TrackFollower(Node):
                 rec.linear_x = 0.08
 
                 if lane_evidence_side == "lane_evidence_right":
-                    rec.angular_z = 0.25   # steer left away from right line
+                    rec.angular_z = 0.7   # steer left away from right line
                     self.last_angular_z = rec.angular_z  # Update last angular velocity command when we have some lane evidence to steer away from right line
                 elif lane_evidence_side == "lane_evidence_left":
-                    rec.angular_z = -0.25  # steer right away from left line
+                    rec.angular_z = -0.7  # steer right away from left line
                     self.last_angular_z = rec.angular_z  # Update last angular velocity command when we have some lane evidence to steer away from left line
                 else: # When lane_evidence_side = "lane_evidence_unclear", we will just steer based on the centre error but with reduced confidence and speed since we are not sure about the lane evidence
                     # rec.linear_x = 0.05

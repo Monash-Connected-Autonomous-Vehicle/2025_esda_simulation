@@ -4,9 +4,10 @@ import math
 import rclpy
 import numpy as np
 from rclpy.node import Node
+from rclpy.action import ActionClient
 
 from geometry_msgs.msg import PoseStamped, Twist, PointStamped
-from nav2_msgs.action import NavigateToPose
+from nav2_msgs.action import NavigateToPose, FollowWaypoints
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from nav_msgs.msg import OccupancyGrid
 from visualization_msgs.msg import Marker, MarkerArray
@@ -24,6 +25,10 @@ class WaypointNavigator(Node):
         self.declare_parameter('robot_frame', 'base_link') # Subscribes to the robot frame to get the robot's current pose
         self.declare_parameter('frame_id', 'map') # Subscribes to the map frame to get the map's current pose
         self.declare_parameter('odometry_topic', '/odom') # Subscribes to the odometry topic to get the robot's current velocity
+
+        self.declare_parameter('safety_bubble_radius', 0.5) # Safety bubble radius around the robot to avoid collisions
+
+        self.client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
         # Getting the parameter values
         self.map_topic = self.get_parameter('map_topic').get_parameter_value().string_value
@@ -79,8 +84,6 @@ class WaypointNavigator(Node):
 
         self.navigator.setInitialPose(self.initial_pose)
 
-        # self.navigator.waitUntilNav2Active()  # Wait until the navigation stack is active
-
         # Initial feedback and result for the navigation task
         self.feedback = None # Feedback from the navigation task. Set to None
         self.result = None # Result of the navigation task. Set to None
@@ -94,31 +97,212 @@ class WaypointNavigator(Node):
         self.goal_pose.pose.position.z = 0.0
         self.goal_pose.pose.orientation.w = 1.0
 
+        # Most recently calculated forward waypoint
+        self.latest_forward_goal = None
 
-        self.sent_goal = False # Flag to indicate if the goal has been sent to the navigation stack
-        self.goal_timer = self.create_timer(1.0, self.send_goal_once) # Timer to send the goal to the navigation stack
+        # Last waypoint actually sent to Nav2
+        self.last_sent_goal = None
+
+        # Prevent multiple goals being sent simultaneously
+        self.goal_in_progress = False
+
+        # Recalculate from map callbacks, but only send at a controlled rate
+        self.goal_timer = self.create_timer(
+            2.0,
+            self.send_latest_forward_goal
+        )
+
+        self.initial_goal_send = False
+        self.initial_goal_timer = self.create_timer(
+            5.0,
+            self.send_initial_forward_goal
+        )
+
+        self.initial_forward_goal_sent = False
 
         # Waypoints for the robot to navigate to. This will be a list of PoseStamped objects
-        self.waypoints = []
+        self.local_waypoints = [] # Local waypoints in the robot's frame of reference
+        self.global_waypoints = []
         self.raw_grid = [] # Raw occupancy grid data as a 2D numpy array
         self.map_matrix = [] # Occupancy grid data as a 2D numpy array
 
-    def listener_callback(self, msg: PoseStamped):
-        self.robot_x = msg.pose.position.x
-        self.robot_y = msg.pose.position.y
+    def send_goal(self, goal_pose: PoseStamped):
+        goal_msg = NavigateToPose.Goal()
+
+        goal_msg.pose.header.frame_id = self.frame_id
+        goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
+
+        goal_msg.pose.pose.position.x = goal_pose.pose.position.x
+        goal_msg.pose.pose.position.y = goal_pose.pose.position.y
+        goal_msg.pose.pose.position.z = 0.0
+
+        goal_msg.pose.pose.orientation = goal_pose.pose.orientation
+
+        if not self.client.server_is_ready():
+            self.get_logger().warn(
+                "NavigateToPose action server is not ready."
+            )
+            self.goal_in_progress = False
+            return
+
+        self._send_goal_future = self.client.send_goal_async(
+            goal_msg,
+            feedback_callback=self.feedback_callback
+        )
+
+        self._send_goal_future.add_done_callback(
+            self.goal_response_callback
+        )
+
+    def send_initial_forward_goal(self):
+        if self.initial_forward_goal_sent:
+            return
+
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.frame_id,       # target: map
+                self.robot_frame,    # source: base_link
+                rclpy.time.Time()
+            )
+
+        except TransformException as ex:
+            self.get_logger().info(
+                f"Waiting for map -> base_link TF: {ex}"
+            )
+            return
+
+        # Current robot pose in map frame
+        robot_x = transform.transform.translation.x
+        robot_y = transform.transform.translation.y
+
+        qx = transform.transform.rotation.x
+        qy = transform.transform.rotation.y
+        qz = transform.transform.rotation.z
+        qw = transform.transform.rotation.w
+
+        robot_yaw = math.atan2(
+            2.0 * (qw * qz + qx * qy),
+            1.0 - 2.0 * (qy * qy + qz * qz)
+        )
+
+        initial_distance = 1.0  # metres forward
+
+        goal = PoseStamped()
+        goal.header.frame_id = self.frame_id
+        goal.header.stamp = self.get_clock().now().to_msg()
+
+        goal.pose.position.x = (
+            robot_x + initial_distance * math.cos(robot_yaw)
+        )
+
+        goal.pose.position.y = (
+            robot_y + initial_distance * math.sin(robot_yaw)
+        )
+
+        goal.pose.position.z = 0.0
+
+        # Keep the robot facing forward
+        goal.pose.orientation.z = math.sin(robot_yaw / 2.0)
+        goal.pose.orientation.w = math.cos(robot_yaw / 2.0)
+
+        self.get_logger().info(
+            f"Sending initial forward goal: "
+            f"x={goal.pose.position.x:.2f}, "
+            f"y={goal.pose.position.y:.2f}"
+        )
+
+        self.initial_forward_goal_sent = True
+        self.initial_goal_timer.cancel()
+
+        self.send_goal(goal)
+
+    def goal_response_callback(self, future):
+        try:
+            goal_handle = future.result()
+        except Exception as ex:
+            self.get_logger().error(
+                f"Failed to send goal: {ex}"
+            )
+            self.goal_in_progress = False
+            return
+
+        if not goal_handle.accepted:
+            self.get_logger().warn("Goal rejected!")
+            self.goal_in_progress = False
+            return
+
+        self.get_logger().info("Goal accepted!")
+
+        self._goal_handle = goal_handle
+
+        # Allow the next periodically generated waypoint to be sent
+        self.goal_in_progress = False
+
+        self._result_future = goal_handle.get_result_async()
+        self._result_future.add_done_callback(
+            self.arrival_callback
+        )
+
+    def feedback_callback(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        # Current distance or position updates can be read here
+
+    def arrival_callback(self, future):
+        result = future.result().result
+        status = future.result().status
         
-        x = msg.pose.position.orientation.x
-        y = msg.pose.position.orientation.y
-        z = msg.pose.position.orientation.z
-        w = msg.pose.position.orientation.w
+        if status == 4:  # STATUS_SUCCEEDED
+            self.get_logger().info('Robot reached the waypoint!')
+        else:
+            self.get_logger().info(f'Navigation failed with status: {status}')
 
-        # Convert quaternion to yaw (z-axis rotation)
-        t3 = +2.0 * (w * z + x * y)
-        t4 = +1.0 - 2.0 * (y * y + z * z)
-        self.robot_yaw = math.atan2(t3, t4)
+    def send_latest_forward_goal(self):
+        """
+        Send the most recently calculated forward waypoint.
 
-        # self.get_logger().info(f'Current Yaw: {self.robot_yaw}')
+        A new goal is only sent if:
+        - a valid forward waypoint exists;
+        - no previous goal is currently being submitted;
+        - the waypoint has moved far enough from the last sent goal.
+        """
 
+        if not self.initial_forward_goal_sent:
+            self.get_logger().debug("Initial forward goal not sent yet.")
+            return
+
+        if self.latest_forward_goal is None:
+            self.get_logger().debug("No forward waypoint available yet.")
+            return
+
+        goal_x = self.latest_forward_goal.pose.position.x
+        goal_y = self.latest_forward_goal.pose.position.y
+
+        # Do not keep resending almost exactly the same waypoint
+        if self.last_sent_goal is not None:
+            last_x = self.last_sent_goal.pose.position.x
+            last_y = self.last_sent_goal.pose.position.y
+
+            target_change = math.hypot(
+                goal_x - last_x,
+                goal_y - last_y
+            )
+
+            minimum_goal_change = 0.5
+
+            if target_change < minimum_goal_change:
+                return
+
+        if self.goal_in_progress:
+            return
+
+        self.get_logger().info(
+            f"Sending forward waypoint: x={goal_x:.2f}, y={goal_y:.2f}"
+        )
+
+        self.goal_in_progress = True
+        self.last_sent_goal = self.latest_forward_goal
+
+        self.send_goal(self.latest_forward_goal)
 
     def odometry_callback(self, msg: Odometry):
         self.current_velocity = msg.twist.twist.linear
@@ -126,166 +310,223 @@ class WaypointNavigator(Node):
     def map_callback(self, msg: OccupancyGrid):
         self.map_data = msg
 
-        width = self.map_data.info.width
-        height = self.map_data.info.height
-        resolution = self.map_data.info.resolution
-        origin_x = self.map_data.info.origin.position.x
-        origin_y = self.map_data.info.origin.position.y
+        width = msg.info.width
+        height = msg.info.height
+        resolution = msg.info.resolution
+        origin_x = msg.info.origin.position.x
+        origin_y = msg.info.origin.position.y
 
-        # 1. Convert the occupancy grid data to a 2D numpy array for easier processing [x, y] = [width, height]
-        self.raw_grid = np.array(self.map_data.data, dtype=np.int8)
+        # Convert occupancy-grid data into a 2D array.
+        self.raw_grid = np.array(msg.data, dtype=np.int8)
         self.map_matrix = self.raw_grid.reshape((height, width))
-        
-        # 2. Find all coordinates of free space (value 0) in the occupancy grid
-        free_space_coords = np.argwhere(self.map_matrix == 0)
 
-        if len(free_space_coords) == 0:
-            self.get_logger().warn("No free space found in the occupancy grid.")
-            return
-        
-        # 3. Go towards the forward heading of the robot (1 meter ahead) and find the closest free space coordinate to that point
         try:
+            # Get the robot pose in the map frame.
             transform = self.tf_buffer.lookup_transform(
-                self.frame_id,          # target frame: map
-                self.robot_frame,       # source frame: base_link
+                self.frame_id,       # map
+                self.robot_frame,    # base_link
                 rclpy.time.Time()
             )
 
-            # Get the furthest point in the forward direction of the robot in the forwards direction
-            
-            # 3.1 Get the robot's current position in the map frame
-            robot_grid_x = int((self.robot_x - origin_x) / resolution)
-            robot_grid_y = int((self.robot_y - origin_y) / resolution)
-
-            # 3.2 Calculate forward unit vector based on the robot's yaw
-            forward_vx = math.cos(self.robot_yaw)
-            forward_vy = math.sin(self.robot_yaw)
-
-            # 3.3 Cast forward ray from the robot's position to find the furthest free space in the forward direction
-            max_distance = 5.0  # Maximum distance to check (in meters)
-            step_size = resolution     # Step size for ray casting (in meters)
-            best_target = None
-            steps = int(max_distance / step_size)
-
-            best_grid_x = robot_grid_x
-            best_grid_y = robot_grid_y
-
-            for i in range(1, steps):
-                current_distance = i * step_size
-                check_x_world = self.robot_x + forward_vx * current_distance
-                check_y_world = self.robot_y + forward_vy * current_distance
-
-                check_grid_x = int((check_x_world - origin_x) / resolution)
-                check_grid_y = int((check_y_world - origin_y) / resolution)
-
-                # Check if the grid coordinates are within bounds
-                if 0 <= check_grid_x < width and 0 <= check_grid_y < height:
-                    if self.map_matrix[check_grid_y, check_grid_x] == 0:  # Free space
-                        best_grid_x = check_grid_x
-                        best_grid_y = check_grid_y
-                    else:
-                        break  # Stop if we hit an obstacle
-            
-                else:
-                    break  # Stop if we go out of bounds
-                
-
         except TransformException as ex:
-            self.get_logger().warn(f"TF not ready yet: {ex}")
-            return
-
-        if self.if_comment:
-            self.get_logger().info(f"Map data given by the SLAM algorithm: {self.map_data}")
-            self.get_logger().info(f"Robot's current position in map frame: x={self.robot_x:.2f}, y={self.robot_y:.2f}, yaw={self.robot_yaw:.2f}")
-            self.get_logger().info(f"Best target grid coordinates: x={best_grid_x}, y={best_grid_y}")
-
-    
-
-    def navigate_to_waypoint(self, waypoint: PoseStamped):
-
-        self.navigator.goToPose(waypoint)
-
-        while False:
-
-            while not self.navigator.isTaskComplete():
-                self.feedback = self.navigator.getFeedback()
-                if self.feedback:
-                    self.get_logger().info(f"Navigating to waypoint: {self.feedback.current_pose}")
-
-            self.result = self.navigator.getResult()
-
-            if self.result == TaskResult.SUCCEEDED:
-                self.get_logger().info("Navigation task succeeded!")
-                
-            elif self.result == TaskResult.CANCELED:
-                self.get_logger().info("Navigation task was canceled.")
-                
-            elif self.result == TaskResult.FAILED:
-                self.get_logger().info("Navigation task failed.")
-                
-            
-            
-            
-    def get_value_in_map_coords(self, map_x, map_y):
-        index = map_y * self.map_data.info.width + map_x
-        return self.map_data.data[index]
-
-    def find_best_target(self):
-        # This function finds the best target for the robot to navigate to based on the occupancy grid data.
-        if self.map_data is None:
-            self.get_logger().warn("Map data is not available yet.")
-            return None
-        
-        highest_number = max(self.map_data.data)
-        lowest_number = min(self.map_data.data)
-
-    def send_goal_once(self):
-        if self.sent_goal:
-            return
-
-        try:
-            transform = self.tf_buffer.lookup_transform(
-                self.frame_id,          # target frame: map
-                self.robot_frame,       # source frame: base_link
-                rclpy.time.Time()
+            self.get_logger().warn(
+                f"TF not ready yet: {ex}",
+                throttle_duration_sec=2.0
             )
-        except TransformException as ex:
-            self.get_logger().warn(f"TF not ready yet: {ex}")
             return
 
-        self.sent_goal = True
+        # Robot position in the map frame.
+        self.robot_x = transform.transform.translation.x
+        self.robot_y = transform.transform.translation.y
 
-        point = PointStamped()
-        point.header.frame_id = self.robot_frame
-        point.header.stamp = self.get_clock().now().to_msg()
-        point.point.x = 1.0
-        point.point.y = 0.0
-        point.point.z = 0.0
+        # Robot orientation in the map frame.
+        qx = transform.transform.rotation.x
+        qy = transform.transform.rotation.y
+        qz = transform.transform.rotation.z
+        qw = transform.transform.rotation.w
 
-        map_point = do_transform_point(point, transform)
-
-        goal_pose = PoseStamped()
-        goal_pose.header.frame_id = self.frame_id
-        goal_pose.header.stamp = self.get_clock().now().to_msg()
-        goal_pose.pose.position.x = map_point.point.x
-        goal_pose.pose.position.y = map_point.point.y
-        goal_pose.pose.position.z = 0.0
-
-        goal_pose.pose.orientation.w = 0.0
-
-        self.get_logger().info(
-            f"Sending goal 1m ahead: x={goal_pose.pose.position.x:.2f}, y={goal_pose.pose.position.y:.2f}"
+        self.robot_yaw = math.atan2(
+            2.0 * (qw * qz + qx * qy),
+            1.0 - 2.0 * (qy * qy + qz * qz)
         )
 
-        self.navigate_to_waypoint(goal_pose)
-        
-    def filter_clusters(self):
-        pass
+        # Convert robot position into occupancy-grid coordinates.
+        robot_grid_x = int(
+            (self.robot_x - origin_x) / resolution
+        )
+        robot_grid_y = int(
+            (self.robot_y - origin_y) / resolution
+        )
 
-    def create_local_waypoints(self):
+        # Make sure the robot itself is inside the map.
+        if not (
+            0 <= robot_grid_x < width
+            and 0 <= robot_grid_y < height
+        ):
+            self.get_logger().warn(
+                "Robot position is outside the occupancy grid."
+            )
+            return
 
-        pass
+        # Direction directly in front of the robot.
+        forward_vx = math.cos(self.robot_yaw)
+        forward_vy = math.sin(self.robot_yaw)
 
+        # Search farther ahead, but only send a nearby goal.
+        search_distance = 5.0
+        max_goal_distance = 1.5
+        minimum_goal_distance = 0.4
+
+        # Permit only a small amount of unknown space.
+        #
+        # This allows the robot to continue exploring without selecting a goal
+        # several metres into completely unobserved space.
+        max_unknown_distance = 0.5
+        unknown_distance = 0.0
+
+        step_size = resolution
+        number_of_steps = int(search_distance / step_size)
+
+        best_grid_x = robot_grid_x
+        best_grid_y = robot_grid_y
+
+        found_target = False
+
+        for i in range(1, number_of_steps + 1):
+            current_distance = i * step_size
+
+            check_world_x = (
+                self.robot_x
+                + forward_vx * current_distance
+            )
+            check_world_y = (
+                self.robot_y
+                + forward_vy * current_distance
+            )
+
+            check_grid_x = int(
+                (check_world_x - origin_x) / resolution
+            )
+            check_grid_y = int(
+                (check_world_y - origin_y) / resolution
+            )
+
+            # Stop if the ray leaves the occupancy grid.
+            if not (
+                0 <= check_grid_x < width
+                and 0 <= check_grid_y < height
+            ):
+                break
+
+            cell_value = self.map_matrix[
+                check_grid_y,
+                check_grid_x
+            ]
+
+            if cell_value == 0:
+                # Confirmed free space.
+                best_grid_x = check_grid_x
+                best_grid_y = check_grid_y
+                found_target = True
+
+                # Reset because we have returned to known free space.
+                unknown_distance = 0.0
+
+            elif cell_value == -1:
+                # Unknown space.
+                unknown_distance += step_size
+
+                if unknown_distance <= max_unknown_distance:
+                    best_grid_x = check_grid_x
+                    best_grid_y = check_grid_y
+                    found_target = True
+                else:
+                    break
+
+            else:
+                # Positive values represent occupied/probably occupied cells.
+                break
+
+        if not found_target:
+            self.get_logger().warn(
+                "No suitable forward target found."
+            )
+            return
+
+        # Convert selected grid cell back into map coordinates.
+        best_world_x = (
+            origin_x
+            + (best_grid_x + 0.5) * resolution
+        )
+        best_world_y = (
+            origin_y
+            + (best_grid_y + 0.5) * resolution
+        )
+
+        dx = best_world_x - self.robot_x
+        dy = best_world_y - self.robot_y
+
+        distance_to_target = math.hypot(dx, dy)
+
+        # Limit the actual Nav2 goal to a short look-ahead distance.
+        if distance_to_target > max_goal_distance:
+            scale = max_goal_distance / distance_to_target
+
+            best_world_x = self.robot_x + dx * scale
+            best_world_y = self.robot_y + dy * scale
+
+            distance_to_target = max_goal_distance
+
+        if distance_to_target < minimum_goal_distance:
+            self.get_logger().info(
+                f"Forward target is too close: "
+                f"{distance_to_target:.2f} m"
+            )
+
+            # Do not clear latest_forward_goal here.
+            # The next map update may produce a valid target.
+            return
+
+        forward_goal = PoseStamped()
+
+        forward_goal.header.frame_id = self.frame_id
+        forward_goal.header.stamp = (
+            self.get_clock().now().to_msg()
+        )
+
+        forward_goal.pose.position.x = best_world_x
+        forward_goal.pose.position.y = best_world_y
+        forward_goal.pose.position.z = 0.0
+
+        # Make the goal face in the current forward direction.
+        forward_goal.pose.orientation.x = 0.0
+        forward_goal.pose.orientation.y = 0.0
+        forward_goal.pose.orientation.z = math.sin(
+            self.robot_yaw / 2.0
+        )
+        forward_goal.pose.orientation.w = math.cos(
+            self.robot_yaw / 2.0
+        )
+
+        # This goal will be sent by send_latest_forward_goal().
+        self.latest_forward_goal = forward_goal
+
+        target_cell_value = self.map_matrix[
+            best_grid_y,
+            best_grid_x
+        ]
+
+        self.get_logger().info(
+            f"Robot: "
+            f"x={self.robot_x:.2f}, "
+            f"y={self.robot_y:.2f}, "
+            f"yaw={self.robot_yaw:.2f} | "
+            f"Forward goal: "
+            f"x={best_world_x:.2f}, "
+            f"y={best_world_y:.2f}, "
+            f"distance={distance_to_target:.2f} m | "
+            f"cell={target_cell_value}"
+        )
 
 if __name__ == '__main__':
     # import rclpy
@@ -293,6 +534,8 @@ if __name__ == '__main__':
 
     rclpy.init()
     navigator = WaypointNavigator()
+
+    # navigator.send_goal(navigator.goal_pose)  # Send the goal to the navigation stack
     rclpy.spin(navigator)
     rclpy.destroy_node(navigator)
     rclpy.shutdown()

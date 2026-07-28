@@ -24,9 +24,11 @@ import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
-from sensor_msgs.msg import Image
+from rclpy.qos import (qos_profile_sensor_data, qos_profile_system_default)
+from sensor_msgs.msg import Image, CameraInfo
 
 from lane_detection import LaneDetectionNode
+
 
 
 def _letterbox_for_img(img, new_shape=640, color=(114, 114, 114), auto=True):
@@ -114,6 +116,19 @@ class LaneDetectionTwinLiteNode(LaneDetectionNode):
         self._reroute_image_subscription()
 
         self._initialize_twinlite_model()
+
+        self.drivable_mask_pub = self.create_publisher(
+            Image,
+            '/lane/drivable_area_mask',
+            qos_profile_sensor_data
+
+        )
+
+        self.drivable_overlay_pub = self.create_publisher(
+            Image,
+            '/lane/drivable_area_overlay',
+            qos_profile_sensor_data
+        )
 
         self.get_logger().info('TwinLiteNet+ lane detection override active (original lane_detection.py unchanged)')
 
@@ -432,6 +447,17 @@ class LaneDetectionTwinLiteNode(LaneDetectionNode):
             cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
             lines, lane_mask, edges = self.detect_white_lanes(cv_image)
+
+            if self._latest_da_mask is not None:
+                mask_msg = self.bridge.cv2_to_imgmsg(
+                    self._latest_da_mask,
+                    encoding='mono8'
+                )
+
+                # The mask corresponds to the left camera image.
+                mask_msg.header = msg.header
+
+                self.drivable_mask_pub.publish(mask_msg)
 
             viz_image = cv_image.copy()
             detection_image = np.zeros_like(cv_image)

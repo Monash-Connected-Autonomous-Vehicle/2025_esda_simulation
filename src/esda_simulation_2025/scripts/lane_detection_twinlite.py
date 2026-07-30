@@ -335,6 +335,8 @@ class LaneDetectionTwinLiteNode(LaneDetectionNode):
                     .numpy() > 0
                 ).astype(np.uint8) * 255
 
+                self._latest_da_mask[-20:, :] = 0
+
             else:
                 self._latest_da_mask = None
 

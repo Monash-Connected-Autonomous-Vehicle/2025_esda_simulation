@@ -25,7 +25,8 @@ class WaypointNavigator(Node):
         self.declare_parameter('robot_frame', 'base_link') # Subscribes to the robot frame to get the robot's current pose
         self.declare_parameter('frame_id', 'map') # Subscribes to the map frame to get the map's current pose
         self.declare_parameter('odometry_topic', '/odom') # Subscribes to the odometry topic to get the robot's current velocity
-
+        self.declare_parameter('lane_topic', '/lane_markers') # Subscribes to the lane topic to get the lane markers
+        
         self.declare_parameter('safety_bubble_radius', 0.5) # Safety bubble radius around the robot to avoid collisions
 
         self.client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
@@ -60,6 +61,13 @@ class WaypointNavigator(Node):
             Odometry,
             self.odometry_topic,
             self.odometry_callback,
+            10
+        )
+
+        self.lane_subscriber = self.create_subscription(
+            MarkerArray,
+            self.get_parameter('lane_topic').get_parameter_value().string_value,
+            self.lane_callback,
             10
         )
 
@@ -527,6 +535,31 @@ class WaypointNavigator(Node):
             f"distance={distance_to_target:.2f} m | "
             f"cell={target_cell_value}"
         )
+    
+    def is_waypoint_within_safety_bubble(self, waypoint: PoseStamped) -> bool:
+        """
+        Check if a given waypoint is within the safety bubble radius of the robot.
+
+        :param waypoint: The waypoint to check.
+        :return: True if the waypoint is within the safety bubble, False otherwise.
+        """
+        if self.current_pose is None:
+            return False
+
+        dx = waypoint.pose.position.x - self.current_pose.pose.position.x
+        dy = waypoint.pose.position.y - self.current_pose.pose.position.y
+        distance = math.hypot(dx, dy)
+
+        return distance <= self.get_parameter('safety_bubble_radius').get_parameter_value().double_value
+
+    def lane_callback(self, msg: MarkerArray):
+        # Process lane markers from the MarkerArray message
+        # For now, just log the number of markers received
+        # self.get_logger().info(f"Received {len(msg.markers)} lane markers.")
+        pass
+
+    def follow_lane(self):
+        pass
 
 if __name__ == '__main__':
     # import rclpy

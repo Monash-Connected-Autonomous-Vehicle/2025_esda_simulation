@@ -134,6 +134,32 @@ class WaypointNavigator(Node):
         self.raw_grid = [] # Raw occupancy grid data as a 2D numpy array
         self.map_matrix = [] # Occupancy grid data as a 2D numpy array
 
+        # Parameters for the occupancy grid and robot size
+        self.inflation_radius = 0.5 # Inflation radius for the occupancy grid to account for the robot's size
+        self.cost_scaling_factor = 10.0 # Cost scaling factor for the occupancy grid to account for the robot's size
+
+        # Parameters for lane following
+        # Latest lane centreline expressed in map frame
+        self.lane_centreline = []
+
+        # Look-ahead distance for lane following
+        self.lane_lookahead_distance = 1.5  # metres
+
+        # Prevent old lane detections being used indefinitely
+        self.last_lane_update_time = None
+
+        # Parameters for the laser scan
+        self.latest_scan = None
+
+        self.scan_subscriber = self.create_subscription(
+            LaserScan,
+            '/scan',
+            self.scan_callback,
+            10
+        )
+
+
+
     def send_goal(self, goal_pose: PoseStamped):
         goal_msg = NavigateToPose.Goal()
 
@@ -295,7 +321,7 @@ class WaypointNavigator(Node):
                 goal_y - last_y
             )
 
-            minimum_goal_change = 0.5
+            minimum_goal_change = 0.2
 
             if target_change < minimum_goal_change:
                 return
@@ -309,7 +335,7 @@ class WaypointNavigator(Node):
 
         self.goal_in_progress = True
         self.last_sent_goal = self.latest_forward_goal
-
+        
         self.send_goal(self.latest_forward_goal)
 
     def odometry_callback(self, msg: Odometry):
@@ -357,6 +383,19 @@ class WaypointNavigator(Node):
             2.0 * (qw * qz + qx * qy),
             1.0 - 2.0 * (qy * qy + qz * qz)
         )
+
+        lane_goal = self.calculate_lane_goal()
+
+        if lane_goal is not None:
+            self.latest_forward_goal = lane_goal
+
+            self.get_logger().info(
+                f"Lane-following goal: "
+                f"x={lane_goal.pose.position.x:.2f}, "
+                f"y={lane_goal.pose.position.y:.2f}"
+            )
+
+            return
 
         # Convert robot position into occupancy-grid coordinates.
         robot_grid_x = int(
@@ -553,12 +592,173 @@ class WaypointNavigator(Node):
         return distance <= self.get_parameter('safety_bubble_radius').get_parameter_value().double_value
 
     def lane_callback(self, msg: MarkerArray):
-        # Process lane markers from the MarkerArray message
-        # For now, just log the number of markers received
-        # self.get_logger().info(f"Received {len(msg.markers)} lane markers.")
-        pass
+        left_points = []
+        right_points = []
+
+        for marker in msg.markers:
+            point = (
+                marker.pose.position.x,
+                marker.pose.position.y,
+                marker.pose.position.z
+            )
+
+            if marker.ns == "left_lane":
+                left_points.append(point)
+            elif marker.ns == "right_lane":
+                right_points.append(point)
+
+        self.get_logger().info(
+            f"Left points: {len(left_points)}, "
+            f"Right points: {len(right_points)}"
+        )
+
+        if len(left_points) < 2 or len(right_points) < 2:
+            self.get_logger().warn(
+                "Not enough left/right lane points."
+            )
+            return
+
+    def transform_marker_points(
+        self,
+        points,
+        source_frame,
+        transform
+    ):
+        transformed_points = []
+
+        for point in points:
+            stamped_point = PointStamped()
+            stamped_point.header.frame_id = source_frame
+            stamped_point.header.stamp = self.get_clock().now().to_msg()
+
+            stamped_point.point.x = point.x
+            stamped_point.point.y = point.y
+            stamped_point.point.z = point.z
+
+            transformed = do_transform_point(
+                stamped_point,
+                transform
+            )
+
+            transformed_points.append(
+                (
+                    transformed.point.x,
+                    transformed.point.y
+                )
+            )
+
+        return transformed_points
+    
+    def smooth_centerline(self, points, window_size=3):
+        if len(points) < window_size:
+            return points
+
+        smoothed = []
+
+        for i in range(len(points)):
+            start = max(0, i - window_size + 1)
+            window = points[start:i + 1]
+
+            average_x = sum(
+                point[0] for point in window
+            ) / len(window)
+
+            average_y = sum(
+                point[1] for point in window
+            ) / len(window)
+
+            smoothed.append((average_x, average_y))
+
+        return smoothed
+
+    def calculate_lane_goal(self):
+        """
+        Select a point along the curved lane centreline based on accumulated
+        distance, rather than selecting the point directly in front of the robot.
+        """
+
+        if len(self.lane_centreline) < 2:
+            return None
+
+        # Remove centreline points behind the robot.
+        forward_points = []
+
+        forward_x = math.cos(self.robot_yaw)
+        forward_y = math.sin(self.robot_yaw)
+
+        for point_x, point_y in self.lane_centreline:
+            dx = point_x - self.robot_x
+            dy = point_y - self.robot_y
+
+            longitudinal_distance = (
+                dx * forward_x + dy * forward_y
+            )
+
+            if longitudinal_distance > 0.2:
+                forward_points.append((point_x, point_y))
+
+        if len(forward_points) < 2:
+            return None
+
+        # Find the point approximately lane_lookahead_distance metres
+        # along the detected centreline.
+        accumulated_distance = 0.0
+        previous_point = forward_points[0]
+        selected_point = forward_points[-1]
+        selected_index = len(forward_points) - 1
+
+        for i in range(1, len(forward_points)):
+            current_point = forward_points[i]
+
+            segment_distance = math.hypot(
+                current_point[0] - previous_point[0],
+                current_point[1] - previous_point[1]
+            )
+
+            accumulated_distance += segment_distance
+
+            if accumulated_distance >= self.lane_lookahead_distance:
+                selected_point = current_point
+                selected_index = i
+                break
+
+            previous_point = current_point
+
+        # Determine the direction of the centreline at the goal.
+        if selected_index < len(forward_points) - 1:
+            next_point = forward_points[selected_index + 1]
+            tangent_dx = next_point[0] - selected_point[0]
+            tangent_dy = next_point[1] - selected_point[1]
+        else:
+            previous_point = forward_points[selected_index - 1]
+            tangent_dx = selected_point[0] - previous_point[0]
+            tangent_dy = selected_point[1] - previous_point[1]
+
+        goal_yaw = math.atan2(tangent_dy, tangent_dx)
+
+        goal = PoseStamped()
+        goal.header.frame_id = self.frame_id
+        goal.header.stamp = self.get_clock().now().to_msg()
+
+        goal.pose.position.x = selected_point[0]
+        goal.pose.position.y = selected_point[1]
+        goal.pose.position.z = 0.0
+
+        goal.pose.orientation.z = math.sin(goal_yaw / 2.0)
+        goal.pose.orientation.w = math.cos(goal_yaw / 2.0)
+
+        return goal
 
     def follow_lane(self):
+        pass
+
+    def scan_callback(self, msg: LaserScan):
+        self.latest_scan = msg
+
+    def get_scan_clearance(self, angle: float)->float:
+        scan_data = self.latest_scan.msg
+
+        
         pass
 
 if __name__ == '__main__':

@@ -36,6 +36,7 @@ class WaypointNavigator(Node):
         self.robot_frame = self.get_parameter('robot_frame').get_parameter_value().string_value
         self.frame_id = self.get_parameter('frame_id').get_parameter_value().string_value
         self.odometry_topic = self.get_parameter('odometry_topic').get_parameter_value().string_value
+        self.safety_bubble_radius = self.get_parameter('safety_bubble_radius').get_parameter_value().double_value
 
         # Transforms
         self.tf_buffer = Buffer()
@@ -736,12 +737,28 @@ class WaypointNavigator(Node):
 
         goal_yaw = math.atan2(tangent_dy, tangent_dx)
 
+        lateral_offset = self.calculate_avoidance_offset()
+
+        # Unit vector perpendicular to the lane direction.
+        left_normal_x = -math.sin(goal_yaw)
+        left_normal_y = math.cos(goal_yaw)
+
+        adjusted_x = (
+            selected_point[0]
+            + lateral_offset * left_normal_x
+        )
+
+        adjusted_y = (
+            selected_point[1]
+            + lateral_offset * left_normal_y
+        )
+
         goal = PoseStamped()
         goal.header.frame_id = self.frame_id
         goal.header.stamp = self.get_clock().now().to_msg()
 
-        goal.pose.position.x = selected_point[0]
-        goal.pose.position.y = selected_point[1]
+        goal.pose.position.x = adjusted_x
+        goal.pose.position.y = adjusted_y
         goal.pose.position.z = 0.0
 
         goal.pose.orientation.z = math.sin(goal_yaw / 2.0)
@@ -755,11 +772,54 @@ class WaypointNavigator(Node):
     def scan_callback(self, msg: LaserScan):
         self.latest_scan = msg
 
-    def get_scan_clearance(self, angle: float)->float:
+    def get_scan_clearance(self, angle_min_deg: float, angle_max_deg: float)->float:
         scan_data = self.latest_scan.msg
 
+        if self.latest_scan is None:
+            self.get_logger().warn("No laser scan data available.")
+            return float('inf')
+
+        valid_ranges = []
+
+        angle_min = math.radians(angle_min_deg)
+        angle_max = math.radians(angle_max_deg)
+
+        for index, range_value in enumerate(self.latest_scan.ranges):
+            angle = self.latest_scan.angle_min + index * self.latest_scan.angle_increment
+
+            if angle_min <= angle <= angle_max:
+                if not math.isinf(range_value) and not math.isnan(range_value):
+                    valid_ranges.append(range_value)
+
+        if not valid_ranges:
+            self.get_logger().warn("No valid scan data in the specified angle range.")
+            return float('inf')
+
+        return min(valid_ranges)
+
+    def calculate_avoidance_offset(self)->float:
+        # No scan data available, so no avoidance offset can be calculated.
+        if self.latest_scan is None:
+            self.get_logger().warn("No laser scan data available for avoidance calculation.")
+            return 0.0
         
-        pass
+        front_clearance = self.get_scan_clearance(-30, 30)
+        left_clearance = self.get_scan_clearance(30, 90)
+        right_clearance = self.get_scan_clearance(-90, -30)
+
+        avoidance_offset = 0.5  # Default offset if no obstacles are detected
+
+        if front_clearance > self.safety_bubble_radius:
+            return 0.0  # No offset needed if the front is clear
+        
+        if left_clearance < right_clearance:
+            return -avoidance_offset  # Obstacle on the left, steer right
+        
+        return avoidance_offset  # Obstacle on the right, steer left
+    
+
+        
+        
 
 if __name__ == '__main__':
     # import rclpy

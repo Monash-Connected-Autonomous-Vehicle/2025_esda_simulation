@@ -773,7 +773,6 @@ class WaypointNavigator(Node):
         self.latest_scan = msg
 
     def get_scan_clearance(self, angle_min_deg: float, angle_max_deg: float)->float:
-        scan_data = self.latest_scan.msg
 
         if self.latest_scan is None:
             self.get_logger().warn("No laser scan data available.")
@@ -808,6 +807,16 @@ class WaypointNavigator(Node):
         right_clearance = self.get_scan_clearance(-90, -30)
 
         avoidance_offset = 0.5  # Default offset if no obstacles are detected
+        desired_clearance = 0.5  # Desired clearance from obstacles
+        max_offset = 0.7        # Maximum lateral offset to avoid obstacles
+        
+        # Positive when right is more obstructed
+        clearance_difference = left_clearance - right_clearance
+
+        lateral_offset = 0.5 * clearance_difference  # Scale the offset based on the difference in clearance
+
+
+
 
         if front_clearance > self.safety_bubble_radius:
             return 0.0  # No offset needed if the front is clear
@@ -818,7 +827,7 @@ class WaypointNavigator(Node):
         return avoidance_offset  # Obstacle on the right, steer left
     
 
-        
+    
         
 
 if __name__ == '__main__':

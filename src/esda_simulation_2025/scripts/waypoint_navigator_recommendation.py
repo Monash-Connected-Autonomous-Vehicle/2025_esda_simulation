@@ -674,83 +674,175 @@ class WaypointNavigator(Node):
 
     def calculate_lane_goal(self):
         """
-        Select a point along the curved lane centreline based on accumulated
-        distance, rather than selecting the point directly in front of the robot.
+        Choose a curved lane waypoint with the greatest obstacle clearance.
         """
 
         if len(self.lane_centreline) < 2:
             return None
 
-        # Remove centreline points behind the robot.
-        forward_points = []
+        robot_forward_x = math.cos(self.robot_yaw)
+        robot_forward_y = math.sin(self.robot_yaw)
 
-        forward_x = math.cos(self.robot_yaw)
-        forward_y = math.sin(self.robot_yaw)
+        forward_points = []
 
         for point_x, point_y in self.lane_centreline:
             dx = point_x - self.robot_x
             dy = point_y - self.robot_y
 
             longitudinal_distance = (
-                dx * forward_x + dy * forward_y
+                dx * robot_forward_x
+                + dy * robot_forward_y
             )
 
-            if longitudinal_distance > 0.2:
+            if longitudinal_distance > 0.15:
                 forward_points.append((point_x, point_y))
 
         if len(forward_points) < 2:
             return None
 
-        # Find the point approximately lane_lookahead_distance metres
-        # along the detected centreline.
+        forward_points.sort(
+            key=lambda point: math.hypot(
+                point[0] - self.robot_x,
+                point[1] - self.robot_y
+            )
+        )
+
+        # Reduce lookahead near the wall so the robot does not cut the bend.
+        right_clearance = self.get_scan_clearance(-100, -20)
+        front_clearance = self.get_scan_clearance(-20, 20)
+
+        if right_clearance < 0.8 or front_clearance < 1.0:
+            lookahead_distance = 0.5
+        elif right_clearance < 1.5:
+            lookahead_distance = 0.8
+        else:
+            lookahead_distance = 1.3
+
         accumulated_distance = 0.0
-        previous_point = forward_points[0]
-        selected_point = forward_points[-1]
         selected_index = len(forward_points) - 1
 
         for i in range(1, len(forward_points)):
-            current_point = forward_points[i]
-
             segment_distance = math.hypot(
-                current_point[0] - previous_point[0],
-                current_point[1] - previous_point[1]
+                forward_points[i][0] - forward_points[i - 1][0],
+                forward_points[i][1] - forward_points[i - 1][1]
             )
 
             accumulated_distance += segment_distance
 
-            if accumulated_distance >= self.lane_lookahead_distance:
-                selected_point = current_point
+            if accumulated_distance >= lookahead_distance:
                 selected_index = i
                 break
 
-            previous_point = current_point
+        selected_point = forward_points[selected_index]
 
-        # Determine the direction of the centreline at the goal.
-        if selected_index < len(forward_points) - 1:
-            next_point = forward_points[selected_index + 1]
-            tangent_dx = next_point[0] - selected_point[0]
-            tangent_dy = next_point[1] - selected_point[1]
-        else:
-            previous_point = forward_points[selected_index - 1]
-            tangent_dx = selected_point[0] - previous_point[0]
-            tangent_dy = selected_point[1] - previous_point[1]
-
-        goal_yaw = math.atan2(tangent_dy, tangent_dx)
-
-        lateral_offset = self.calculate_avoidance_offset()
-
-        # Unit vector perpendicular to the lane direction.
-        left_normal_x = -math.sin(goal_yaw)
-        left_normal_y = math.cos(goal_yaw)
-
-        adjusted_x = (
-            selected_point[0]
-            + lateral_offset * left_normal_x
+        # Determine local tangent using surrounding points.
+        previous_index = max(0, selected_index - 1)
+        next_index = min(
+            len(forward_points) - 1,
+            selected_index + 1
         )
 
-        adjusted_y = (
-            selected_point[1]
-            + lateral_offset * left_normal_y
+        tangent_dx = (
+            forward_points[next_index][0]
+            - forward_points[previous_index][0]
+        )
+        tangent_dy = (
+            forward_points[next_index][1]
+            - forward_points[previous_index][1]
+        )
+
+        tangent_length = math.hypot(
+            tangent_dx,
+            tangent_dy
+        )
+
+        if tangent_length < 1e-6:
+            return None
+
+        tangent_x = tangent_dx / tangent_length
+        tangent_y = tangent_dy / tangent_length
+
+        # Ensure tangent points forward.
+        if (
+            tangent_x * robot_forward_x
+            + tangent_y * robot_forward_y
+        ) < 0.0:
+            tangent_x = -tangent_x
+            tangent_y = -tangent_y
+
+        left_normal_x = -tangent_y
+        left_normal_y = tangent_x
+
+        # Search multiple lateral positions.
+        candidate_offsets = [
+            -0.3,
+            0.0,
+            0.2,
+            0.4,
+            0.6,
+            0.8
+        ]
+
+        minimum_required_clearance = 0.9
+
+        best_candidate = None
+        best_score = -float('inf')
+
+        for lateral_offset in candidate_offsets:
+            candidate_x = (
+                selected_point[0]
+                + lateral_offset * left_normal_x
+            )
+
+            candidate_y = (
+                selected_point[1]
+                + lateral_offset * left_normal_y
+            )
+
+            map_clearance = self.get_map_clearance(
+                candidate_x,
+                candidate_y
+            )
+
+            # Prefer clearance strongly, but penalise unnecessary deviation.
+            score = (
+                3.0 * map_clearance
+                - 0.3 * abs(lateral_offset)
+            )
+
+            self.get_logger().info(
+                f"Candidate offset={lateral_offset:.2f}, "
+                f"clearance={map_clearance:.2f}, "
+                f"score={score:.2f}"
+            )
+
+            if (
+                map_clearance >= minimum_required_clearance
+                and score > best_score
+            ):
+                best_candidate = (
+                    candidate_x,
+                    candidate_y,
+                    lateral_offset,
+                    map_clearance
+                )
+
+                best_score = score
+
+        if best_candidate is None:
+            self.get_logger().warn(
+                "No lane waypoint has sufficient obstacle clearance."
+            )
+            return None
+
+        adjusted_x = best_candidate[0]
+        adjusted_y = best_candidate[1]
+        chosen_offset = best_candidate[2]
+        chosen_clearance = best_candidate[3]
+
+        goal_yaw = math.atan2(
+            tangent_y,
+            tangent_x
         )
 
         goal = PoseStamped()
@@ -761,8 +853,18 @@ class WaypointNavigator(Node):
         goal.pose.position.y = adjusted_y
         goal.pose.position.z = 0.0
 
+        goal.pose.orientation.x = 0.0
+        goal.pose.orientation.y = 0.0
         goal.pose.orientation.z = math.sin(goal_yaw / 2.0)
         goal.pose.orientation.w = math.cos(goal_yaw / 2.0)
+
+        self.get_logger().info(
+            f"Selected lane goal | "
+            f"offset={chosen_offset:.2f}, "
+            f"clearance={chosen_clearance:.2f}, "
+            f"x={adjusted_x:.2f}, "
+            f"y={adjusted_y:.2f}"
+        )
 
         return goal
 
@@ -796,39 +898,110 @@ class WaypointNavigator(Node):
 
         return min(valid_ranges)
 
-    def calculate_avoidance_offset(self)->float:
-        # No scan data available, so no avoidance offset can be calculated.
+    def calculate_avoidance_offset(self) -> float:
         if self.latest_scan is None:
-            self.get_logger().warn("No laser scan data available for avoidance calculation.")
             return 0.0
-        
-        front_clearance = self.get_scan_clearance(-30, 30)
-        left_clearance = self.get_scan_clearance(30, 90)
-        right_clearance = self.get_scan_clearance(-90, -30)
 
-        avoidance_offset = 0.5  # Default offset if no obstacles are detected
-        desired_clearance = 0.5  # Desired clearance from obstacles
-        max_offset = 0.7        # Maximum lateral offset to avoid obstacles
-        
-        # Positive when right is more obstructed
-        clearance_difference = left_clearance - right_clearance
+        front_clearance = self.get_scan_clearance(-20, 20)
+        left_clearance = self.get_scan_clearance(20, 100)
+        right_clearance = self.get_scan_clearance(-100, -20)
 
-        lateral_offset = 0.5 * clearance_difference  # Scale the offset based on the difference in clearance
+        desired_clearance = 1.5
+        maximum_offset = 0.8
+        gain = 1.2
 
+        self.get_logger().info(
+            f"SCAN: left={left_clearance:.2f}, "
+            f"front={front_clearance:.2f}, "
+            f"right={right_clearance:.2f}"
+        )
 
+        # Positive means move left.
+        right_error = max(
+            0.0,
+            desired_clearance - right_clearance
+        )
 
+        # Negative means move right.
+        left_error = max(
+            0.0,
+            desired_clearance - left_clearance
+        )
 
-        if front_clearance > self.safety_bubble_radius:
-            return 0.0  # No offset needed if the front is clear
-        
-        if left_clearance < right_clearance:
-            return -avoidance_offset  # Obstacle on the left, steer right
-        
-        return avoidance_offset  # Obstacle on the right, steer left
+        lateral_offset = gain * (
+            right_error - left_error
+        )
+
+        lateral_offset = max(
+            -maximum_offset,
+            min(maximum_offset, lateral_offset)
+        )
+
+        self.get_logger().info(
+            f"Avoidance offset: {lateral_offset:.2f}"
+        )
+
+        return lateral_offset
     
+    def get_map_clearance(self, world_x: float, world_y: float) -> float:
+        """
+        Estimate the distance from a world point to the nearest occupied
+        occupancy-grid cell.
+        """
 
-    
-        
+        if self.map_data is None or len(self.map_matrix) == 0:
+            return 0.0
+
+        resolution = self.map_data.info.resolution
+        origin_x = self.map_data.info.origin.position.x
+        origin_y = self.map_data.info.origin.position.y
+        width = self.map_data.info.width
+        height = self.map_data.info.height
+
+        centre_grid_x = int((world_x - origin_x) / resolution)
+        centre_grid_y = int((world_y - origin_y) / resolution)
+
+        if not (
+            0 <= centre_grid_x < width
+            and 0 <= centre_grid_y < height
+        ):
+            return 0.0
+
+        search_radius = 2.0
+        search_cells = int(search_radius / resolution)
+
+        minimum_distance = search_radius
+
+        for grid_y in range(
+            max(0, centre_grid_y - search_cells),
+            min(height, centre_grid_y + search_cells + 1)
+        ):
+            for grid_x in range(
+                max(0, centre_grid_x - search_cells),
+                min(width, centre_grid_x + search_cells + 1)
+            ):
+                cell_value = self.map_matrix[grid_y, grid_x]
+
+                # Treat occupied cells as obstacles.
+                if cell_value >= 50:
+                    obstacle_world_x = (
+                        origin_x + (grid_x + 0.5) * resolution
+                    )
+                    obstacle_world_y = (
+                        origin_y + (grid_y + 0.5) * resolution
+                    )
+
+                    distance = math.hypot(
+                        obstacle_world_x - world_x,
+                        obstacle_world_y - world_y
+                    )
+
+                    minimum_distance = min(
+                        minimum_distance,
+                        distance
+                    )
+
+        return minimum_distance
 
 if __name__ == '__main__':
     # import rclpy

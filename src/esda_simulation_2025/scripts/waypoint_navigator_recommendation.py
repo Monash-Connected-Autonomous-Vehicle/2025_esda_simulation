@@ -597,16 +597,16 @@ class WaypointNavigator(Node):
         right_points = []
 
         for marker in msg.markers:
-            point = (
-                marker.pose.position.x,
-                marker.pose.position.y,
-                marker.pose.position.z
-            )
+            for point in marker.points:
+                if marker.ns == "left_lane":
+                    left_points.append(
+                        (point.x, point.y)
+                    )
 
-            if marker.ns == "left_lane":
-                left_points.append(point)
-            elif marker.ns == "right_lane":
-                right_points.append(point)
+                elif marker.ns == "right_lane":
+                    right_points.append(
+                        (point.x, point.y)
+                    )
 
         self.get_logger().info(
             f"Left points: {len(left_points)}, "
@@ -618,6 +618,53 @@ class WaypointNavigator(Node):
                 "Not enough left/right lane points."
             )
             return
+
+        # Sort each boundary from near to far.
+        left_points.sort(
+            key=lambda point: math.hypot(
+                point[0] - self.robot_x,
+                point[1] - self.robot_y
+            )
+        )
+
+        right_points.sort(
+            key=lambda point: math.hypot(
+                point[0] - self.robot_x,
+                point[1] - self.robot_y
+            )
+        )
+
+        number_of_pairs = min(
+            len(left_points),
+            len(right_points)
+        )
+
+        centreline = []
+
+        for i in range(number_of_pairs):
+            centre_x = (
+                left_points[i][0]
+                + right_points[i][0]
+            ) / 2.0
+
+            centre_y = (
+                left_points[i][1]
+                + right_points[i][1]
+            ) / 2.0
+
+            centreline.append(
+                (centre_x, centre_y)
+            )
+
+        self.lane_centreline = self.smooth_centerline(
+            centreline,
+            window_size=3
+        )
+
+        self.get_logger().warn(
+            f"Updated lane centreline with "
+            f"{len(self.lane_centreline)} points"
+        )
 
     def transform_marker_points(
         self,
@@ -674,7 +721,15 @@ class WaypointNavigator(Node):
 
     def calculate_lane_goal(self):
         """
-        Choose a curved lane waypoint with the greatest obstacle clearance.
+        Select a waypoint that balances:
+
+        - following the lane;
+        - moving forwards;
+        - moving toward larger free space;
+        - maintaining obstacle clearance.
+
+        Unlike the previous version, this searches both forward and lateral
+        positions instead of only shifting one fixed forward point.
         """
 
         if len(self.lane_centreline) < 2:
@@ -694,12 +749,13 @@ class WaypointNavigator(Node):
                 + dy * robot_forward_y
             )
 
-            if longitudinal_distance > 0.15:
+            if longitudinal_distance > 0.1:
                 forward_points.append((point_x, point_y))
 
         if len(forward_points) < 2:
             return None
 
+        # Sort the centreline from near to far.
         forward_points.sort(
             key=lambda point: math.hypot(
                 point[0] - self.robot_x,
@@ -707,142 +763,383 @@ class WaypointNavigator(Node):
             )
         )
 
-        # Reduce lookahead near the wall so the robot does not cut the bend.
-        right_clearance = self.get_scan_clearance(-100, -20)
-        front_clearance = self.get_scan_clearance(-20, 20)
+        right_scan_clearance = self.get_scan_clearance(-100, -20)
+        left_scan_clearance = self.get_scan_clearance(20, 100)
+        front_scan_clearance = self.get_scan_clearance(-20, 20)
 
-        if right_clearance < 0.8 or front_clearance < 1.0:
-            lookahead_distance = 0.5
-        elif right_clearance < 1.5:
-            lookahead_distance = 0.8
-        else:
-            lookahead_distance = 1.3
+        forced_lateral_offset = 0.0
 
-        accumulated_distance = 0.0
-        selected_index = len(forward_points) - 1
-
-        for i in range(1, len(forward_points)):
-            segment_distance = math.hypot(
-                forward_points[i][0] - forward_points[i - 1][0],
-                forward_points[i][1] - forward_points[i - 1][1]
+        # Wall on the robot's right: move the waypoint left.
+        if right_scan_clearance < 1.8:
+            forced_lateral_offset = max(
+                0.5,
+                min(
+                    1.2,
+                    1.8 - right_scan_clearance
+                )
             )
 
-            accumulated_distance += segment_distance
+        # Wall on the robot's left: move the waypoint right.
+        elif left_scan_clearance < 1.8:
+            forced_lateral_offset = -max(
+                0.5,
+                min(
+                    1.2,
+                    1.8 - left_scan_clearance
+                )
+            )
 
-            if accumulated_distance >= lookahead_distance:
-                selected_index = i
-                break
+        # Use shorter candidate distances near obstacles.
+        if (
+            front_scan_clearance < 0.8
+            or right_scan_clearance < 0.7
+            or left_scan_clearance < 0.7
+        ):
+            forward_distances = [0.35, 0.5, 0.7]
+        elif (
+            front_scan_clearance < 1.4
+            or right_scan_clearance < 1.2
+            or left_scan_clearance < 1.2
+        ):
+            forward_distances = [0.5, 0.8, 1.0]
+        else:
+            forward_distances = [0.8, 1.1, 1.4]
 
-        selected_point = forward_points[selected_index]
+        # Find a centreline point at each requested forward distance.
+        centreline_candidates = []
 
-        # Determine local tangent using surrounding points.
-        previous_index = max(0, selected_index - 1)
-        next_index = min(
-            len(forward_points) - 1,
-            selected_index + 1
-        )
+        for target_distance in forward_distances:
+            accumulated_distance = 0.0
+            selected_index = len(forward_points) - 1
 
-        tangent_dx = (
-            forward_points[next_index][0]
-            - forward_points[previous_index][0]
-        )
-        tangent_dy = (
-            forward_points[next_index][1]
-            - forward_points[previous_index][1]
-        )
+            for i in range(1, len(forward_points)):
+                segment_distance = math.hypot(
+                    forward_points[i][0] - forward_points[i - 1][0],
+                    forward_points[i][1] - forward_points[i - 1][1]
+                )
 
-        tangent_length = math.hypot(
-            tangent_dx,
-            tangent_dy
-        )
+                accumulated_distance += segment_distance
 
-        if tangent_length < 1e-6:
+                if accumulated_distance >= target_distance:
+                    selected_index = i
+                    break
+
+            selected_point = forward_points[selected_index]
+
+            # Robot-relative left direction
+            left_x = -math.sin(self.robot_yaw)
+            left_y = math.cos(self.robot_yaw)
+
+            right_clearance = self.get_scan_clearance(-100, -20)
+
+            if right_clearance < 1.5:
+                left_shift = 0.8
+
+                selected_point = (
+                    selected_point[0] + left_shift * left_x,
+                    selected_point[1] + left_shift * left_y
+                )
+
+                self.get_logger().warn(
+                    f"Right wall close ({right_clearance:.2f} m), "
+                    f"moving waypoint {left_shift:.2f} m left"
+                )
+
+            previous_index = max(0, selected_index - 1)
+            next_index = min(
+                len(forward_points) - 1,
+                selected_index + 1
+            )
+
+            tangent_dx = (
+                forward_points[next_index][0]
+                - forward_points[previous_index][0]
+            )
+
+            tangent_dy = (
+                forward_points[next_index][1]
+                - forward_points[previous_index][1]
+            )
+
+            tangent_length = math.hypot(
+                tangent_dx,
+                tangent_dy
+            )
+
+            if tangent_length < 1e-6:
+                continue
+
+            tangent_x = tangent_dx / tangent_length
+            tangent_y = tangent_dy / tangent_length
+
+            # Make sure the tangent points generally forwards.
+            if (
+                tangent_x * robot_forward_x
+                + tangent_y * robot_forward_y
+            ) < 0.0:
+                tangent_x = -tangent_x
+                tangent_y = -tangent_y
+
+            centreline_candidates.append(
+                (
+                    selected_point,
+                    tangent_x,
+                    tangent_y,
+                    target_distance
+                )
+            )
+
+        if not centreline_candidates:
             return None
 
-        tangent_x = tangent_dx / tangent_length
-        tangent_y = tangent_dy / tangent_length
+        # Right wall detected: only permit centre-left and left candidates.
+        if right_scan_clearance < 1.5:
+            lateral_offsets = [
+                0.4,
+                0.6,
+                0.8,
+                1.0,
+                1.2
+            ]
 
-        # Ensure tangent points forward.
-        if (
-            tangent_x * robot_forward_x
-            + tangent_y * robot_forward_y
-        ) < 0.0:
-            tangent_x = -tangent_x
-            tangent_y = -tangent_y
+        # Left wall detected: only permit centre-right and right candidates.
+        elif left_scan_clearance < 1.5:
+            lateral_offsets = [
+                -1.2,
+                -1.0,
+                -0.8,
+                -0.6,
+                -0.4
+            ]
 
-        left_normal_x = -tangent_y
-        left_normal_y = tangent_x
-
-        # Search multiple lateral positions.
-        candidate_offsets = [
-            -0.3,
-            0.0,
-            0.2,
-            0.4,
-            0.6,
-            0.8
-        ]
+        # Both sides reasonably clear.
+        else:
+            lateral_offsets = [
+                -0.4,
+                -0.2,
+                0.0,
+                0.2,
+                0.4
+            ]
 
         minimum_required_clearance = 0.9
 
         best_candidate = None
         best_score = -float('inf')
 
-        for lateral_offset in candidate_offsets:
-            candidate_x = (
-                selected_point[0]
-                + lateral_offset * left_normal_x
-            )
+        for (
+            selected_point,
+            tangent_x,
+            tangent_y,
+            target_distance
+        ) in centreline_candidates:
 
-            candidate_y = (
-                selected_point[1]
-                + lateral_offset * left_normal_y
-            )
+            # left_normal_x = -tangent_y
+            # left_normal_y = tangent_x
+            # Use the robot's physical left direction for wall avoidance.
+            left_normal_x = -math.sin(self.robot_yaw)
+            left_normal_y = math.cos(self.robot_yaw)
 
-            map_clearance = self.get_map_clearance(
-                candidate_x,
-                candidate_y
-            )
-
-            # Prefer clearance strongly, but penalise unnecessary deviation.
-            score = (
-                3.0 * map_clearance
-                - 0.3 * abs(lateral_offset)
-            )
-
-            self.get_logger().info(
-                f"Candidate offset={lateral_offset:.2f}, "
-                f"clearance={map_clearance:.2f}, "
-                f"score={score:.2f}"
-            )
-
-            if (
-                map_clearance >= minimum_required_clearance
-                and score > best_score
-            ):
-                best_candidate = (
-                    candidate_x,
-                    candidate_y,
-                    lateral_offset,
-                    map_clearance
+            for lateral_offset in lateral_offsets:
+                candidate_x = (
+                    selected_point[0]
+                    + lateral_offset * left_normal_x
                 )
 
-                best_score = score
+                candidate_y = (
+                    selected_point[1]
+                    + lateral_offset * left_normal_y
+                )
+
+                map_clearance = self.get_map_clearance(
+                    candidate_x,
+                    candidate_y
+                )
+
+                # Candidate direction relative to robot.
+                candidate_dx = candidate_x - self.robot_x
+                candidate_dy = candidate_y - self.robot_y
+
+                candidate_distance = math.hypot(
+                    candidate_dx,
+                    candidate_dy
+                )
+
+                if candidate_distance < 1e-6:
+                    continue
+
+                candidate_direction_x = candidate_dx / candidate_distance
+                candidate_direction_y = candidate_dy / candidate_distance
+
+                forward_alignment = (
+                    candidate_direction_x * robot_forward_x
+                    + candidate_direction_y * robot_forward_y
+                )
+
+                # Reject goals that are behind the robot.
+                if forward_alignment < 0.15:
+                    continue
+
+                # Strongly favour free space.
+                clearance_score = 6.0 * map_clearance
+
+                # Keep some preference for making progress.
+                progress_score = 1.0 * target_distance
+
+                # Prefer alignment with the lane, but not too strongly.
+                lane_alignment = (
+                    candidate_direction_x * tangent_x
+                    + candidate_direction_y * tangent_y
+                )
+
+                lane_score = 0.7 * lane_alignment
+
+                # Penalise very large lateral shifts slightly.
+                lateral_penalty = 0.25 * abs(lateral_offset)
+
+                # If the wall is on the right, explicitly reward left offsets.
+                free_space_bias = 0.0
+
+                if right_scan_clearance < left_scan_clearance:
+                    free_space_bias = 2.0 * max(
+                        0.0,
+                        lateral_offset
+                    )
+
+                elif left_scan_clearance < right_scan_clearance:
+                    free_space_bias = 2.0 * max(
+                        0.0,
+                        -lateral_offset
+                    )
+
+                score = (
+                    clearance_score
+                    + progress_score
+                    + lane_score
+                    + free_space_bias
+                    - lateral_penalty
+                )
+
+                self.get_logger().info(
+                    f"Candidate | "
+                    f"forward={target_distance:.2f}, "
+                    f"offset={lateral_offset:.2f}, "
+                    f"clearance={map_clearance:.2f}, "
+                    f"alignment={forward_alignment:.2f}, "
+                    f"score={score:.2f}"
+                )
+
+                if (
+                    map_clearance >= minimum_required_clearance
+                    and score > best_score
+                ):
+                    best_score = score
+
+                    best_candidate = (
+                        candidate_x,
+                        candidate_y,
+                        tangent_x,
+                        tangent_y,
+                        lateral_offset,
+                        target_distance,
+                        map_clearance,
+                        selected_point
+                    )
 
         if best_candidate is None:
             self.get_logger().warn(
-                "No lane waypoint has sufficient obstacle clearance."
+                "No sufficiently clear lane candidate found."
             )
             return None
 
-        adjusted_x = best_candidate[0]
-        adjusted_y = best_candidate[1]
-        chosen_offset = best_candidate[2]
-        chosen_clearance = best_candidate[3]
+        (
+            adjusted_x,
+            adjusted_y,
+            tangent_x,
+            tangent_y,
+            chosen_offset,
+            chosen_forward_distance,
+            chosen_clearance,
+            selected_point
+        ) = best_candidate
+
+        # Vector from robot to selected goal, expressed in map frame.
+        goal_dx = adjusted_x - self.robot_x
+        goal_dy = adjusted_y - self.robot_y
+
+        # Convert goal position into robot-relative coordinates.
+        # Positive lateral position means the goal is to the robot's left.
+        goal_forward = (
+            math.cos(self.robot_yaw) * goal_dx
+            + math.sin(self.robot_yaw) * goal_dy
+        )
+
+        goal_lateral = (
+            -math.sin(self.robot_yaw) * goal_dx
+            + math.cos(self.robot_yaw) * goal_dy
+        )
+
+        self.get_logger().warn(
+            f"Before enforcement | "
+            f"forward={goal_forward:.2f}, "
+            f"lateral={goal_lateral:.2f}, "
+            f"right_clearance={right_scan_clearance:.2f}"
+        )
+
+        # If there is a wall on the right, force the final waypoint
+        # to be at least this far left of the robot.
+        if right_scan_clearance < 1.8:
+            minimum_left_distance = 0.9
+
+            if goal_lateral < minimum_left_distance:
+                required_left_shift = (
+                    minimum_left_distance - goal_lateral
+                )
+
+                robot_left_x = -math.sin(self.robot_yaw)
+                robot_left_y = math.cos(self.robot_yaw)
+
+                adjusted_x += required_left_shift * robot_left_x
+                adjusted_y += required_left_shift * robot_left_y
+
+                goal_lateral = minimum_left_distance
+
+                self.get_logger().error(
+                    f"RIGHT WALL: forcing final waypoint "
+                    f"{minimum_left_distance:.2f} m to robot's LEFT"
+                )
+
+        # Face from the robot toward the selected free-space waypoint.
+        goal_yaw = math.atan2(
+            adjusted_y - self.robot_y,
+            adjusted_x - self.robot_x
+        )
+
+        # Hard safety correction:
+        # if the right wall is close, ensure the chosen goal is sufficiently left.
+        if right_scan_clearance < 1.5 and chosen_offset < 0.6:
+            forced_offset = 0.6
+
+            adjusted_x = (
+                selected_point[0]
+                + forced_offset * left_normal_x
+            )
+
+            adjusted_y = (
+                selected_point[1]
+                + forced_offset * left_normal_y
+            )
+
+            chosen_offset = forced_offset
+
+            self.get_logger().warn(
+                f"Right wall close at {right_scan_clearance:.2f} m. "
+                f"Forcing goal {forced_offset:.2f} m LEFT."
+            )
 
         goal_yaw = math.atan2(
-            tangent_y,
-            tangent_x
+            adjusted_y - self.robot_y,
+            adjusted_x - self.robot_x
         )
 
         goal = PoseStamped()
@@ -858,8 +1155,9 @@ class WaypointNavigator(Node):
         goal.pose.orientation.z = math.sin(goal_yaw / 2.0)
         goal.pose.orientation.w = math.cos(goal_yaw / 2.0)
 
-        self.get_logger().info(
-            f"Selected lane goal | "
+        self.get_logger().warn(
+            f"SELECTED FREE-SPACE GOAL | "
+            f"forward={chosen_forward_distance:.2f}, "
             f"offset={chosen_offset:.2f}, "
             f"clearance={chosen_clearance:.2f}, "
             f"x={adjusted_x:.2f}, "

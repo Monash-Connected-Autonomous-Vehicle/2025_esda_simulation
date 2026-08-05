@@ -159,8 +159,6 @@ class WaypointNavigator(Node):
             10
         )
 
-
-
     def send_goal(self, goal_pose: PoseStamped):
         goal_msg = NavigateToPose.Goal()
 
@@ -374,6 +372,8 @@ class WaypointNavigator(Node):
         self.robot_x = transform.transform.translation.x
         self.robot_y = transform.transform.translation.y
 
+    
+
         # Robot orientation in the map frame.
         qx = transform.transform.rotation.x
         qy = transform.transform.rotation.y
@@ -384,6 +384,8 @@ class WaypointNavigator(Node):
             2.0 * (qw * qz + qx * qy),
             1.0 - 2.0 * (qy * qy + qz * qz)
         )
+
+        self.current_pose = (self.robot_x, self.robot_y, self.robot_yaw)
 
         lane_goal = self.calculate_lane_goal()
 
@@ -556,6 +558,12 @@ class WaypointNavigator(Node):
             self.robot_yaw / 2.0
         )
 
+        if self.is_waypoint_within_safety_bubble(forward_goal):
+            self.get_logger().info(
+                "Forward target is within safety bubble."
+            )
+            return
+
         # This goal will be sent by send_latest_forward_goal().
         self.latest_forward_goal = forward_goal
 
@@ -586,10 +594,11 @@ class WaypointNavigator(Node):
         if self.current_pose is None:
             return False
 
-        dx = waypoint.pose.position.x - self.current_pose.pose.position.x
-        dy = waypoint.pose.position.y - self.current_pose.pose.position.y
+        dx = waypoint.pose.position.x - self.current_pose[0]
+        dy = waypoint.pose.position.y - self.current_pose[1]
         distance = math.hypot(dx, dy)
 
+        self.get_logger().warn("Checking waypoint distance: {:.2f} m, safety bubble radius: {:.2f} m".format( distance, self.get_parameter('safety_bubble_radius').get_parameter_value().double_value))
         return distance <= self.get_parameter('safety_bubble_radius').get_parameter_value().double_value
 
     def lane_callback(self, msg: MarkerArray):
@@ -922,7 +931,7 @@ class WaypointNavigator(Node):
                 0.4
             ]
 
-        minimum_required_clearance = 0.9
+        minimum_required_clearance = 1.4
 
         best_candidate = None
         best_score = -float('inf')
@@ -981,7 +990,7 @@ class WaypointNavigator(Node):
                     continue
 
                 # Strongly favour free space.
-                clearance_score = 6.0 * map_clearance
+                clearance_score = 15.0 * map_clearance
 
                 # Keep some preference for making progress.
                 progress_score = 1.0 * target_distance
@@ -1142,6 +1151,13 @@ class WaypointNavigator(Node):
             adjusted_x - self.robot_x
         )
 
+        # if self.is_waypoint_within_safety_bubble():
+        #     self.get_logger().warn(
+        #         "Selected waypoint is within safety bubble. "
+        #         "Not sending this goal."
+        #     )
+        #     return None
+
         goal = PoseStamped()
         goal.header.frame_id = self.frame_id
         goal.header.stamp = self.get_clock().now().to_msg()
@@ -1300,6 +1316,18 @@ class WaypointNavigator(Node):
                     )
 
         return minimum_distance
+    
+    def is_near_obstacle(self, world_x: float, world_y: float, threshold: float = 0.5) -> bool:
+        """
+        Check if a given world point is near an obstacle in the occupancy grid.
+
+        :param world_x: X coordinate in the map frame.
+        :param world_y: Y coordinate in the map frame.
+        :param threshold: Distance threshold to consider "near" an obstacle.
+        :return: True if near an obstacle, False otherwise.
+        """
+        clearance = self.get_map_clearance(world_x, world_y)
+        return clearance < threshold
 
 if __name__ == '__main__':
     # import rclpy

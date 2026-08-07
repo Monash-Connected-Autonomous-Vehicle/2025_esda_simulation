@@ -247,6 +247,9 @@ class WaypointNavigator(Node):
         self.initial_forward_goal_sent = True
         self.initial_goal_timer.cancel()
 
+        self.goal_in_progress = True
+        self.last_sent_goal = goal
+
         self.send_goal(goal)
 
     def goal_response_callback(self, future):
@@ -257,37 +260,71 @@ class WaypointNavigator(Node):
                 f"Failed to send goal: {ex}"
             )
             self.goal_in_progress = False
+            self.latest_forward_goal = None
             return
 
         if not goal_handle.accepted:
-            self.get_logger().warn("Goal rejected!")
+            self.get_logger().warn(
+                "Goal rejected. Allowing a new waypoint to be generated."
+            )
+
+            # The robot was never navigating to this waypoint because
+            # Nav2 rejected it.
             self.goal_in_progress = False
+            self.latest_forward_goal = None
             return
 
         self.get_logger().info("Goal accepted!")
 
         self._goal_handle = goal_handle
 
-        # Allow the next periodically generated waypoint to be sent
-        self.goal_in_progress = False
 
         self._result_future = goal_handle.get_result_async()
         self._result_future.add_done_callback(
             self.arrival_callback
         )
 
+    
+
     def feedback_callback(self, feedback_msg):
         feedback = feedback_msg.feedback
         # Current distance or position updates can be read here
 
     def arrival_callback(self, future):
-        result = future.result().result
-        status = future.result().status
-        
+        try:
+            wrapped_result = future.result()
+            status = wrapped_result.status
+
+        except Exception as ex:
+            self.get_logger().error(
+                f"Failed to obtain navigation result: {ex}"
+            )
+
+            # Keep goal_in_progress True because the waypoint was not
+            # confirmed as reached.
+            return
+
         if status == 4:  # STATUS_SUCCEEDED
-            self.get_logger().info('Robot reached the waypoint!')
+            self.get_logger().info(
+                "Robot reached the waypoint. "
+                "A new waypoint may now be generated."
+            )
+
+            # Only now allow the next waypoint to be calculated.
+            self.goal_in_progress = False
+            self.latest_forward_goal = None
+            self.last_sent_goal = None
+
         else:
-            self.get_logger().info(f'Navigation failed with status: {status}')
+            self.get_logger().error(
+                f"Navigation did not reach the waypoint. "
+                f"Status: {status}. "
+                f"New waypoint generation remains locked."
+            )
+
+            # Do not set this to False.
+            # The robot did not successfully reach the waypoint.
+            self.goal_in_progress = True
 
     def send_latest_forward_goal(self):
         """
@@ -355,6 +392,29 @@ class WaypointNavigator(Node):
 
     def update_forward_goal(self):
         
+        if self.goal_in_progress:
+            if self.last_sent_goal is not None:
+                goal_x = self.last_sent_goal.pose.position.x
+                goal_y = self.last_sent_goal.pose.position.y
+
+                distance_to_goal = math.hypot(
+                    goal_x - self.robot_x,
+                    goal_y - self.robot_y
+                )
+
+                self.get_logger().warn(
+                    f"Waypoint generation locked: "
+                    f"goal still marked active. "
+                    f"Approximate distance={distance_to_goal:.2f} m"
+                )
+            else:
+                self.get_logger().warn(
+                    "Waypoint generation locked because "
+                    "goal_in_progress=True, but no last goal exists."
+                )
+
+            return
+
         self.latest_forward_goal = None
 
         if self.map_data is None:
@@ -407,15 +467,20 @@ class WaypointNavigator(Node):
 
         lane_goal = self.calculate_lane_goal()
 
+
         if lane_goal is not None:
             self.latest_forward_goal = lane_goal
+            return
 
-            self.get_logger().info(
-                f"Lane-following goal: "
-                f"x={lane_goal.pose.position.x:.2f}, "
-                f"y={lane_goal.pose.position.y:.2f}"
+        right_clearance = self.get_scan_clearance(-100, -20)
+        front_clearance = self.get_scan_clearance(-20, 20)
+        left_clearance = self.get_scan_clearance(20, 100)
+
+        if right_clearance < 1.5:
+            self.get_logger().warn(
+                f"Lane goal unavailable and right wall is only "
+                f"{right_clearance:.2f} m away. Refusing forward fallback."
             )
-
             return
 
         # Convert robot position into occupancy-grid coordinates.
@@ -646,16 +711,12 @@ class WaypointNavigator(Node):
                 transform
             )
 
-            for point in transformed_points:
+            for point_x, point_y in transformed_points:
                 if marker.ns == "left_lane":
-                    left_points.append(
-                        (point.x, point.y)
-                    )
+                    left_points.append((point_x, point_y))
 
                 elif marker.ns == "right_lane":
-                    right_points.append(
-                        (point.x, point.y)
-                    )
+                    right_points.append((point_x, point_y))
 
 
         self.get_logger().info(
@@ -997,10 +1058,10 @@ class WaypointNavigator(Node):
                 )
 
                 # Hard rejection rather than merely reducing the score.
-                if goal_clearance < 0.65:
+                if goal_clearance < 1:
                     continue
 
-                if path_clearance < 0.55:
+                if path_clearance < 0.9:
                     continue
 
                 # --------------------------------------------------
@@ -1095,6 +1156,24 @@ class WaypointNavigator(Node):
             chosen_path_clearance
         ) = best_candidate
 
+        free_space_result = self.bias_waypoint_toward_free_space(
+            goal_x,
+            goal_y,
+            forward_x,
+            forward_y,
+            left_x,
+            left_y
+        )
+
+        if free_space_result is None:
+            self.get_logger().warn(
+                "Rejecting waypoint because it could not be moved "
+                "to a sufficiently clear position."
+            )
+            return None
+
+        goal_x, goal_y = free_space_result
+
         # ----------------------------------------------------------
         # 5. Final hard wall-side check
         # ----------------------------------------------------------
@@ -1127,14 +1206,14 @@ class WaypointNavigator(Node):
             goal_y
         )
 
-        if final_goal_clearance < 0.65:
+        if final_goal_clearance < 1.0:
             self.get_logger().warn(
                 f"Final waypoint clearance too small: "
                 f"{final_goal_clearance:.2f} m"
             )
             return None
 
-        if final_path_clearance < 0.55:
+        if final_path_clearance < 0.80:
             self.get_logger().warn(
                 f"Final waypoint path too close to obstacle: "
                 f"{final_path_clearance:.2f} m"
@@ -1142,10 +1221,7 @@ class WaypointNavigator(Node):
             return None
 
         # Face directly toward the selected waypoint.
-        goal_yaw = math.atan2(
-            goal_y - self.robot_y,
-            goal_x - self.robot_x
-        )
+        goal_yaw = self.robot_yaw
 
         goal = PoseStamped()
         goal.header.frame_id = self.frame_id
@@ -1295,7 +1371,7 @@ class WaypointNavigator(Node):
                 cell_value = self.map_matrix[grid_y, grid_x]
 
                 # Treat occupied cells as obstacles.
-                if cell_value >= 50:
+                if cell_value >= 50 or cell_value == -1:
                     obstacle_world_x = (
                         origin_x + (grid_x + 0.5) * resolution
                     )
@@ -1382,6 +1458,159 @@ class WaypointNavigator(Node):
             return 0.0
 
         return minimum_clearance
+    
+    def bias_waypoint_toward_free_space(
+        self,
+        original_x: float,
+        original_y: float,
+        forward_x: float,
+        forward_y: float,
+        left_x: float,
+        left_y: float
+    ):
+        """
+        Search around the proposed waypoint and return a nearby point with
+        greater obstacle clearance.
+
+        Positive lateral offset moves left.
+        Negative lateral offset moves right.
+        """
+
+        minimum_required_clearance = 1.20
+
+        original_clearance = self.get_map_clearance(
+            original_x,
+            original_y
+        )
+
+        self.get_logger().warn(
+            f"Original waypoint clearance: "
+            f"{original_clearance:.2f} m"
+        )
+
+        # The original waypoint is already sufficiently clear.
+        if original_clearance >= minimum_required_clearance:
+            return original_x, original_y
+
+        best_x = None
+        best_y = None
+        best_score = -float("inf")
+        best_clearance = 0.0
+        best_offset = 0.0
+
+        # Search both sides of the original waypoint.
+        lateral_offsets = [
+            -1.50,
+            -1.25,
+            -1.00,
+            -0.75,
+            -0.50,
+            -0.25,
+            0.00,
+            0.25,
+            0.50,
+            0.75,
+            1.00,
+            1.25,
+            1.50
+        ]
+
+        # Also permit a small amount of forward/backward adjustment.
+        longitudinal_offsets = [
+            -0.20,
+            0.00,
+            0.20,
+            0.40
+        ]
+
+        for longitudinal_offset in longitudinal_offsets:
+            for lateral_offset in lateral_offsets:
+
+                candidate_x = (
+                    original_x
+                    + longitudinal_offset * forward_x
+                    + lateral_offset * left_x
+                )
+
+                candidate_y = (
+                    original_y
+                    + longitudinal_offset * forward_y
+                    + lateral_offset * left_y
+                )
+
+                goal_clearance = self.get_map_clearance(
+                    candidate_x,
+                    candidate_y
+                )
+
+                path_clearance = self.get_path_clearance(
+                    self.robot_x,
+                    self.robot_y,
+                    candidate_x,
+                    candidate_y
+                )
+
+                # Reject unsafe candidates.
+                if goal_clearance < 1.0:
+                    continue
+
+                if path_clearance < 0.80:
+                    continue
+
+                dx = candidate_x - self.robot_x
+                dy = candidate_y - self.robot_y
+
+                candidate_forward = (
+                    dx * forward_x
+                    + dy * forward_y
+                )
+
+                # Never choose something behind the robot.
+                if candidate_forward < 0.25:
+                    continue
+
+                # Clearance dominates the score.
+                # Small offset penalty prevents unnecessary large jumps.
+                score = (
+                    20.0 * goal_clearance
+                    + 15.0 * path_clearance
+                    + 1.0 * candidate_forward
+                    - 0.5 * abs(lateral_offset)
+                    - 0.3 * abs(longitudinal_offset)
+                )
+
+                self.get_logger().info(
+                    f"FREE-SPACE SEARCH | "
+                    f"lateral={lateral_offset:.2f}, "
+                    f"forward_adjustment={longitudinal_offset:.2f}, "
+                    f"goal_clearance={goal_clearance:.2f}, "
+                    f"path_clearance={path_clearance:.2f}, "
+                    f"score={score:.2f}"
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best_x = candidate_x
+                    best_y = candidate_y
+                    best_clearance = goal_clearance
+                    best_offset = lateral_offset
+
+        if best_x is None:
+            self.get_logger().error(
+                "Waypoint is near a wall and no safer nearby "
+                "free-space position was found."
+            )
+
+            return None
+
+        self.get_logger().warn(
+            f"WAYPOINT MOVED TOWARD FREE SPACE | "
+            f"lateral shift={best_offset:.2f} m, "
+            f"old clearance={original_clearance:.2f} m, "
+            f"new clearance={best_clearance:.2f} m"
+        )
+
+        return best_x, best_y
     
     def is_near_obstacle(self, world_x: float, world_y: float, threshold: float = 0.5) -> bool:
         """

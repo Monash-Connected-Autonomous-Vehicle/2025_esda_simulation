@@ -288,7 +288,15 @@ class WaypointNavigator(Node):
 
     def feedback_callback(self, feedback_msg):
         feedback = feedback_msg.feedback
-        # Current distance or position updates can be read here
+
+        self.get_logger().warn(
+            f"NAV2 FEEDBACK | "
+            f"distance_remaining={feedback.distance_remaining:.2f} m, "
+            f"navigation_time="
+            f"{feedback.navigation_time.sec}."
+            f"{feedback.navigation_time.nanosec:09d} s, "
+            f"recoveries={feedback.number_of_recoveries}"
+        )
 
     def arrival_callback(self, future):
         try:
@@ -299,9 +307,8 @@ class WaypointNavigator(Node):
             self.get_logger().error(
                 f"Failed to obtain navigation result: {ex}"
             )
+            
 
-            # Keep goal_in_progress True because the waypoint was not
-            # confirmed as reached.
             return
 
         if status == 4:  # STATUS_SUCCEEDED
@@ -341,7 +348,7 @@ class WaypointNavigator(Node):
             return
 
         if self.latest_forward_goal is None:
-            self.get_logger().debug("No forward waypoint available yet.")
+            self.get_logger().debug("Nothing sent to Nav2: latest_forward_goal is None.")
             return
 
         goal_x = self.latest_forward_goal.pose.position.x
@@ -480,6 +487,16 @@ class WaypointNavigator(Node):
             self.get_logger().warn(
                 f"Lane goal unavailable and right wall is only "
                 f"{right_clearance:.2f} m away. Refusing forward fallback."
+            )
+
+            recovery_goal = self.find_left_recovery_goal()
+
+            if recovery_goal is not None:
+                self.latest_forward_goal = recovery_goal
+                return
+            
+            self.get_logger().warn(
+                "No safe left recovery waypoint found."
             )
             return
 
@@ -1256,9 +1273,6 @@ class WaypointNavigator(Node):
 
         return goal
 
-    def follow_lane(self):
-        pass
-
     def scan_callback(self, msg: LaserScan):
         self.latest_scan = msg
 
@@ -1286,50 +1300,6 @@ class WaypointNavigator(Node):
 
         return min(valid_ranges)
 
-    def calculate_avoidance_offset(self) -> float:
-        if self.latest_scan is None:
-            return 0.0
-
-        front_clearance = self.get_scan_clearance(-20, 20)
-        left_clearance = self.get_scan_clearance(20, 100)
-        right_clearance = self.get_scan_clearance(-100, -20)
-
-        desired_clearance = 1.5
-        maximum_offset = 0.8
-        gain = 1.2
-
-        self.get_logger().info(
-            f"SCAN: left={left_clearance:.2f}, "
-            f"front={front_clearance:.2f}, "
-            f"right={right_clearance:.2f}"
-        )
-
-        # Positive means move left.
-        right_error = max(
-            0.0,
-            desired_clearance - right_clearance
-        )
-
-        # Negative means move right.
-        left_error = max(
-            0.0,
-            desired_clearance - left_clearance
-        )
-
-        lateral_offset = gain * (
-            right_error - left_error
-        )
-
-        lateral_offset = max(
-            -maximum_offset,
-            min(maximum_offset, lateral_offset)
-        )
-
-        self.get_logger().info(
-            f"Avoidance offset: {lateral_offset:.2f}"
-        )
-
-        return lateral_offset
     
     def get_map_clearance(self, world_x: float, world_y: float) -> float:
         """
@@ -1612,18 +1582,121 @@ class WaypointNavigator(Node):
 
         return best_x, best_y
     
-    def is_near_obstacle(self, world_x: float, world_y: float, threshold: float = 0.5) -> bool:
-        """
-        Check if a given world point is near an obstacle in the occupancy grid.
+    def find_left_recovery_goal(self):
+        if self.map_data is None:
+            return None
+        
+        forward_x = math.cos(self.robot_yaw)
+        forward_y = math.sin(self.robot_yaw)
 
-        :param world_x: X coordinate in the map frame.
-        :param world_y: Y coordinate in the map frame.
-        :param threshold: Distance threshold to consider "near" an obstacle.
-        :return: True if near an obstacle, False otherwise.
-        """
-        clearance = self.get_map_clearance(world_x, world_y)
-        return clearance < threshold
+        left_x = -math.sin(self.robot_yaw)
+        left_y = math.cos(self.robot_yaw)
 
+        best_goal = None
+        best_score = -float("inf")
+
+        # Not searching directly adjacent to the robot because that area is likely to be occupied.
+        forward_distances = [
+            0.4,
+            0.6,
+            0.8,
+            1.0,
+            1.2
+        ]
+
+        # Positive = robot's left, Negative = robot's right
+        left_offsets = [
+            0.3,
+            0.5,
+            0.7,
+            0.9,
+            1.1
+        ]
+
+        for forward_distance in forward_distances:
+            for left_offset in left_offsets:
+
+                candidate_x = (
+                    self.robot_x
+                    + forward_distance * forward_x
+                    + left_offset * left_x
+                )
+
+                candidate_y = (
+                    self.robot_y
+                    + forward_distance * forward_y
+                    + left_offset * left_y
+                )
+
+                # Clearance at candidate
+                goal_clearance = self.get_map_clearance(
+                    candidate_x,
+                    candidate_y
+                )
+
+                # Clearance along path to candidate
+                path_clearance = self.get_path_clearance(
+                    self.robot_x,
+                    self.robot_y,
+                    candidate_x,
+                    candidate_y
+                )
+
+                # Hard safety rejection
+                if goal_clearance < 1.0:
+                    continue
+
+                if path_clearance < 0.8:
+                    continue
+
+                # Prefer:
+                # 1. high obstacle clearance
+                # 2. moving left
+                # 3. some forward progress
+                score = (
+                    10.0 * goal_clearance
+                    + 8.0 * path_clearance
+                    + 3.0 * left_offset
+                    + 1.0 * forward_distance
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best_goal = (
+                        candidate_x,
+                        candidate_y
+                    )
+
+        if best_goal is None:
+            return None
+
+        goal_x, goal_y = best_goal
+
+        goal = PoseStamped()
+        goal.header.frame_id = self.frame_id
+        goal.header.stamp = self.get_clock().now().to_msg()
+
+        goal.pose.position.x = goal_x
+        goal.pose.position.y = goal_y
+        goal.pose.position.z = 0.0
+
+        # Face toward recovery waypoint
+        goal_yaw = math.atan2(
+            goal_y - self.robot_y,
+            goal_x - self.robot_x
+        )
+
+        goal.pose.orientation.z = math.sin(goal_yaw / 2.0)
+        goal.pose.orientation.w = math.cos(goal_yaw / 2.0)
+
+        self.get_logger().warn(
+            f"LEFT RECOVERY GOAL | "
+            f"x={goal_x:.2f}, "
+            f"y={goal_y:.2f}"
+        )
+
+        return goal
+    
 if __name__ == '__main__':
     # import rclpy
     # from rclpy.node import Node

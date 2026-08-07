@@ -624,7 +624,29 @@ class WaypointNavigator(Node):
         right_points = []
 
         for marker in msg.markers:
-            for point in marker.points:
+            
+            source_frame = marker.header.frame_id
+
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    self.frame_id,       # target: map
+                    source_frame,        # source: marker frame
+                    rclpy.time.Time()
+                )
+            except TransformException as ex:
+                self.get_logger().warn(
+                    f"TF not ready for lane markers: {ex}",
+                    throttle_duration_sec=2.0
+                )
+                continue 
+
+            transformed_points = self.transform_marker_points(
+                marker.points,
+                source_frame,
+                transform
+            )
+
+            for point in transformed_points:
                 if marker.ns == "left_lane":
                     left_points.append(
                         (point.x, point.y)
@@ -634,6 +656,7 @@ class WaypointNavigator(Node):
                     right_points.append(
                         (point.x, point.y)
                     )
+
 
         self.get_logger().info(
             f"Left points: {len(left_points)}, "

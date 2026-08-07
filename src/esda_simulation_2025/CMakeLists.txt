@@ -59,6 +59,7 @@ install(PROGRAMS
   scripts/track_follower.py
   scripts/behaviour_tree.py
   scripts/waypoint_navigator_recommendation.py
+  scripts/wavefront_frontier_exploration.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

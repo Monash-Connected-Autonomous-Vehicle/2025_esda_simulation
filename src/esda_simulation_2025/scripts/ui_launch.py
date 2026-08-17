@@ -14,7 +14,7 @@ class SimManager(ctk.CTk):
         super().__init__()
 
         self.title("ESDA SIMULATION SUITE")
-        self.geometry("700x540")
+        self.geometry("700x700")
 
         # Futuristic Appearance
         ctk.set_appearance_mode("dark")
@@ -146,25 +146,45 @@ class SimManager(ctk.CTk):
         # Modules Section
         self.modules_frame = ctk.CTkFrame(self, fg_color=self.bg_panel)
         self.modules_frame.grid(row=6, column=0, pady=6, padx=12, sticky="ew")
-        
+
+
+        self.robot_localization_button = ctk.CTkButton(
+            self.modules_frame,
+            text="Launch Robot Localization",
+            command=self.toggle_robot_localization,
+            font=("Orbitron", 12),
+            fg_color=self.accent_purple,
+            hover_color="#5F27CD",
+            text_color=self.bg_dark
+        )
+
+        self.robot_localization_button.grid(
+            row=0,
+            column=0,
+            columnspan=2,   # <-- spans both columns
+            padx=6,
+            pady=6,
+            sticky="ew"
+        )
+
         self.slam_button = ctk.CTkButton(self.modules_frame, text="Launch SLAM", command=self.toggle_slam, font=("Orbitron", 12), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
-        self.slam_button.grid(row=0, column=0, padx=6, pady=6, sticky="ew")
+        self.slam_button.grid(row=1, column=0, padx=6, pady=6, sticky="ew")
         self.amcl_button = ctk.CTkButton(self.modules_frame, text="Launch AMCL", command=self.toggle_amcl, font=("Orbitron", 12), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
-        self.amcl_button.grid(row=0, column=1, padx=6, pady=6, sticky="ew")
+        self.amcl_button.grid(row=1, column=1, padx=6, pady=6, sticky="ew")
         self.nav_button = ctk.CTkButton(self.modules_frame, text="Launch Nav2", command=self.toggle_nav, font=("Orbitron", 12), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
-        self.nav_button.grid(row=1, column=0, padx=6, pady=6, sticky="ew")
+        self.nav_button.grid(row=2, column=0, padx=6, pady=6, sticky="ew")
         self.rviz_button = ctk.CTkButton(self.modules_frame, text="Launch RViz2", command=self.toggle_rviz, font=("Orbitron", 12), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
-        self.rviz_button.grid(row=1, column=1, padx=6, pady=6, sticky="ew")
+        self.rviz_button.grid(row=2, column=1, padx=6, pady=6, sticky="ew")
         self.follow_the_gap_button = ctk.CTkButton(self.modules_frame, text="Follow the Gap Algorithm", command=self.toggle_follow_the_gap, font=("Orbitron", 12), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
-        self.follow_the_gap_button.grid(row=2, column=0, padx=6, pady=6, sticky="ew")
+        self.follow_the_gap_button.grid(row=3, column=0, padx=6, pady=6, sticky="ew")
         self.track_follower_button = ctk.CTkButton(self.modules_frame, text="Track Follower Algorithm", command=self.launch_track_follower, font=("Orbitron", 12), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
-        self.track_follower_button.grid(row=2, column=1, padx=6, pady=6, sticky="ew")
+        self.track_follower_button.grid(row=3, column=1, padx=6, pady=6, sticky="ew")
         self.modules_frame.grid_columnconfigure((0,1), weight=1)
 
 
         self.behaviour_tree_button = ctk.CTkButton(self.modules_frame, text="Launch Behaviour Tree", command=self.launch_behaviour_tree, font=("Orbitron", 12), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
-        self.behaviour_tree_button.grid(row=3, column=0, columnspan=2, padx=6, pady=6, sticky="ew")
-        self.modules_frame.grid_rowconfigure((0,1,2,3), weight=1)
+        self.behaviour_tree_button.grid(row=4, column=0, columnspan=2, padx=6, pady=6, sticky="ew")
+        self.modules_frame.grid_rowconfigure((0,1,2,3,4), weight=1)
 
         # Teleop and Waypoint Section
         self.teleop_frame = ctk.CTkFrame(self, fg_color=self.bg_panel)
@@ -204,7 +224,8 @@ class SimManager(ctk.CTk):
             "NAV": self.nav_button.cget("fg_color"),
             "RVIZ": self.rviz_button.cget("fg_color"),
             "TELEOP": self.teleop_button.cget("fg_color"),
-            "LANE": self.lane_detection_button.cget("fg_color")
+            "LANE": self.lane_detection_button.cget("fg_color"),
+            "EKF": self.robot_localization_button.cget("fg_color")
         }
 
     def scan_world_files(self):
@@ -319,6 +340,7 @@ class SimManager(ctk.CTk):
         elif name == "RVIZ": self.rviz_button.configure(fg_color=color)
         elif name == "TELEOP": self.teleop_button.configure(fg_color=color)
         elif name == "LANE": self.lane_detection_button.configure(fg_color=color)
+        elif name == "EKF": self.robot_localization_button.configure(fg_color=color)
 
     def check_xterm(self):
         """Check if xterm is installed"""
@@ -608,7 +630,14 @@ class SimManager(ctk.CTk):
         except Exception as e:
             self.status_label.configure(text=f"Error launching: {str(e)}", text_color="#E74C3C")
 
+    def toggle_robot_localization(self):
+        
+        if not self.is_sim_running():
+            self.status_label.configure(text="Error: Launch Simulation first!", text_color="#E74C3C")
+            return
+        cmd = f"ros2 launch esda_simulation_2025 robot_localization_ekf.launch.py use_sim_time:=true"
+        self.run_in_terminal("EKF", cmd)
+
 if __name__ == "__main__":
-    # print("WDADWAWDW")
     app = SimManager()
     app.mainloop()

@@ -46,6 +46,19 @@ class FrontierExploration(Node):
     def map_callback(self, msg):
         self.map = msg
 
+        data = np.array(msg.data)
+
+        unknown = np.sum(data == -1)
+        free = np.sum(data == 0)
+        occupied = np.sum(data > 0)
+
+        self.get_logger().info(
+            f"MAP RECEIVED | "
+            f"unknown={unknown}, "
+            f"free={free}, "
+            f"occupied={occupied}"
+        )
+
     def get_robot_pose(self):
         try:
             trans = self.tf_buffer.lookup_transform(

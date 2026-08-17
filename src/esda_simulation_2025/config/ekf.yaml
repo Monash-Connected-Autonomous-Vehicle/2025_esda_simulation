@@ -1,0 +1,38 @@
+### EKF Configuration for ROS 2 ###
+ekf_filter_node:
+  ros__parameters:
+    # 1. Core Filter Settings
+    frequency: 30.0                    # Frequency (Hz) to output position estimate
+    sensor_timeout: 0.1               # Period (seconds) before a sensor times out
+    two_d_mode: true                  # Set to true for planar/2D environments
+    print_diagnostics: true           # Publishes diagnostic data to /diagnostics
+    use_sim_time: false               # Set to true if running inside a simulator (e.g., Gazebo)
+
+    # 2. Coordinate Frames
+    map_frame: map                    # Global frame (used if fusing absolute global data like GPS)
+    odom_frame: odom                  # Local odometry frame
+    base_link_frame: base_link        # Robot's primary reference frame
+    world_frame: odom                 # Set to odom for local fusion; set to map for global fusion
+
+    # 3. Odometry Input Configuration (odom0)
+    odom0: /odom                      # Topic name of your wheel odometry source
+    odom0_config: [true,  true,  false, # x,   y,   z
+                   false, false, true,  # roll, pitch, yaw
+                   true,  true,  false, # vx,  vy,  vz
+                   false, false, true,  # vroll, vpitch, vyaw
+                   false, false, false] # ax,  ay,  az
+    odom0_queue_size: 10
+    odom0_differential: false
+    odom0_relative: false
+
+    # 4. IMU Input Configuration (imu0)
+    imu0: /imu/data                   # Topic name of your IMU source
+    imu0_config: [false, false, false, # x,   y,   z
+                  false, false, true,  # roll, pitch, yaw
+                  false, false, false, # vx,  vy,  vz
+                  false, false, true,  # vroll, vpitch, vyaw
+                  true,  false, false] # ax,  ay,  az
+    imu0_queue_size: 10
+    imu0_differential: false
+    imu0_relative: true                # Processes fields relative to the first received measurement
+    imu0_remove_gravitational_acceleration: true

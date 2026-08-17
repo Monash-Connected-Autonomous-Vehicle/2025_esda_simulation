@@ -333,6 +333,10 @@ class WaypointNavigator(Node):
             # The robot did not successfully reach the waypoint.
             self.goal_in_progress = True
 
+        self.goal_in_progress = False
+        self.latest_forward_goal = None
+        self.last_sent_goal = None
+
     def send_latest_forward_goal(self):
         """
         Send the most recently calculated forward waypoint.
@@ -648,14 +652,21 @@ class WaypointNavigator(Node):
         forward_goal.pose.position.y = best_world_y
         forward_goal.pose.position.z = 0.0
 
+
+        # Face toward the waypoint
+        goal_yaw = math.atan2(
+            best_world_y - self.robot_y,
+            best_world_x - self.robot_x
+        )
+
         # Make the goal face in the current forward direction.
         forward_goal.pose.orientation.x = 0.0
         forward_goal.pose.orientation.y = 0.0
         forward_goal.pose.orientation.z = math.sin(
-            self.robot_yaw / 2.0
+            goal_yaw / 2.0
         )
         forward_goal.pose.orientation.w = math.cos(
-            self.robot_yaw / 2.0
+            goal_yaw / 2.0
         )
 
         if self.is_waypoint_within_safety_bubble(forward_goal):
@@ -1238,7 +1249,12 @@ class WaypointNavigator(Node):
             return None
 
         # Face directly toward the selected waypoint.
-        goal_yaw = self.robot_yaw
+        # goal_yaw = self.robot_yaw
+
+        goal_yaw = math.atan2(
+            goal_y - self.robot_y,
+            goal_x - self.robot_x
+        )
 
         goal = PoseStamped()
         goal.header.frame_id = self.frame_id
@@ -1521,10 +1537,10 @@ class WaypointNavigator(Node):
                 )
 
                 # Reject unsafe candidates.
-                if goal_clearance < 1.0:
+                if goal_clearance <0.6:
                     continue
 
-                if path_clearance < 0.80:
+                if path_clearance < 0.60:
                     continue
 
                 dx = candidate_x - self.robot_x

@@ -44,6 +44,7 @@ install(DIRECTORY
   worlds
   assets
   maps
+  behaviour_tree
   DESTINATION share/${PROJECT_NAME}
 )
 

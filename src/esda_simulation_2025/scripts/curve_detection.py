@@ -8,9 +8,12 @@ This is a ROS2 Node that returns if whether a curve has been detected in front o
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
-from geometry_msgs.msg import Twist, PointStamped
+from geometry_msgs.msg import Twist, PointStamped, Point
 from nav_msgs.msg import OccupancyGrid
 import numpy as np
+
+from visualization_msgs.msg import Marker
+
 
 from tf2_ros import Buffer, TransformListener, TransformException
 
@@ -44,6 +47,13 @@ class CurveDetectionNode(Node):
             OccupancyGrid,
             '/local_costmap/costmap',
             self.occupancy_listener_callback,
+            10
+        )
+
+        # Publishes the band points to RVIZ for visualization of the centre band points
+        self.marker_publisher = self.create_publisher(
+            Marker,
+            '/curve_detection/centers',
             10
         )
 
@@ -98,21 +108,32 @@ class CurveDetectionNode(Node):
             if (0.0 < x_base < self.curve_lookahead_distant and abs(y_base) < self.curve_width):
                 obstacles_in_front.append((x_base, y_base))
 
+        # Finding the centre for each distance band
+        near = self.get_band_centre(obstacles_in_front, 0.5, 1.0)
+
+        mid = self.get_band_centre(obstacles_in_front, 1.0, 2.0)
+
+        far = self.get_band_centre(obstacles_in_front, 2.0, 3.0)
+
+        self.publish_centres(near, mid, far)
+
         self.get_logger().info(
             f"Obstacles in front: "
             f"{len(obstacles_in_front)}"
         )
 
+        self.get_logger().info(
+            f"Near={near} | Mid={mid} | Far={far}"
+        )
+
         # TEMPORARY DEBUGGING
-        for x, y in obstacles_in_front:
+        # for x, y in obstacles_in_front:
 
-            self.get_logger().info(
-                f"Obstacle: "
-                f"{x:.2f} m forward, "
-                f"{y:.2f} m lateral"
-            )
-
-
+        #     self.get_logger().info(
+        #         f"Obstacle: "
+        #         f"{x:.2f} m forward, "
+        #         f"{y:.2f} m lateral"
+        #     )
 
     def transform_point(self, point, transform):
         """
@@ -162,7 +183,67 @@ class CurveDetectionNode(Node):
         """
         Defines the centre of the track. This is intended to detect for curvature on the track
         """
-        pass
+
+        band_points = [(x, y) for x, y in obstacles if x_min <= x <= x_max]
+
+        if len(band_points) < 2 : 
+            return
+
+        ys = [p[1] for p in band_points]
+
+        left_boundary = max(ys)
+        right_boundary = min(ys)
+
+        centre_y = (left_boundary + right_boundary) / 2.0
+
+        centre_x = (x_min + x_max) / 2.0
+
+        return (centre_x, centre_y)
+
+    def publish_centres(self, near, mid, far):
+        """
+        Publishes the markers 'near', 'mid' and 'far' into RVIZ
+        """
+        
+        # Creating a marker instance
+        point_to_publish = Marker()
+
+        # Defining the characteristics of the point_to_publish
+        point_to_publish.header.frame_id = 'base_link'
+        point_to_publish.header.stamp.sec = 0
+        point_to_publish.header.stamp.nanosec = 0
+
+        point_to_publish.ns = 'curve_centres'
+        point_to_publish.id = 0
+
+        point_to_publish.type = Marker.SPHERE_LIST
+        point_to_publish.action = Marker.ADD
+
+        # Size of each point
+        point_to_publish.scale.x = 0.20
+        point_to_publish.scale.y = 0.20
+        point_to_publish.scale.z = 0.20
+
+        # Marker colour 
+        point_to_publish.color.r = 1.0
+        point_to_publish.color.g = 0.0
+        point_to_publish.color.b = 0.0
+        point_to_publish.color.a = 1.0
+
+        # Marker position
+        for centre in [near, mid, far]:
+            if centre is None:
+                continue
+            
+            point = Point()
+            point.x = centre[0]
+            point.y = centre[1]
+            point.z = 0.1
+
+            point_to_publish.points.append(point)
+
+        self.marker_publisher.publish(point_to_publish)
+
 
 if __name__ == '__main__':
     rclpy.init()

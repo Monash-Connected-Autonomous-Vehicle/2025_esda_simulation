@@ -115,7 +115,52 @@ class CurveDetectionNode(Node):
 
         far = self.get_band_centre(obstacles_in_front, 2.0, 3.0)
 
+        heading_near = np.arctan2(mid[1] - near[1], mid[0] - near[0]) if near and mid else None
+        heading_far = np.arctan2(far[1] - mid[1], far[0] - mid[0]) if near and far else None
+
+        heading_change = heading_far - heading_near if heading_near is not None and heading_far is not None else None
+
+        heading_change = np.arctan2(np.sin(heading_change), np.cos(heading_change)) if heading_change is not None else None
+
+        CURVE_THRESHOLD = np.deg2rad(10)
+
+        if heading_change is not None:
+
+            if heading_change > CURVE_THRESHOLD:
+                curve_direction = "LEFT"
+
+            elif heading_change < -CURVE_THRESHOLD:
+                curve_direction = "RIGHT"
+
+            else:
+                curve_direction = "STRAIGHT"
+        else:
+            curve_direction = "UNKNOWN"
+
+
         self.publish_centres(near, mid, far)
+
+        # Fitting lines onto the left and right obstacles to determine the curvature of the track
+        left_points = [
+            (x, y) for x, y in obstacles_in_front if y > 0
+            if y > 0
+        ]
+
+        right_points = [
+            (x, y) for x, y in obstacles_in_front if y < 0
+            if y < 0
+        ]
+
+        left_line = self.fit_line_onto_obstacle(left_points)
+        right_line = self.fit_line_onto_obstacle(right_points)
+
+        self.publish_fitted_linear_line(left_line)
+        self.publish_fitted_linear_line(right_line)
+
+        # Fitting a quadratic curve onto the obstacles to determine the curvature of the track
+        all_points = obstacles_in_front
+        quadratic_curve = self.fit_quadratic_curve_onto_obstacle(all_points)
+        self.publish_fitted_quadratic_curve(quadratic_curve)
 
         self.get_logger().info(
             f"Obstacles in front: "
@@ -123,17 +168,8 @@ class CurveDetectionNode(Node):
         )
 
         self.get_logger().info(
-            f"Near={near} | Mid={mid} | Far={far}"
+            f"Near={near} | Mid={mid} | Far={far}. Direction change: {curve_direction}" 
         )
-
-        # TEMPORARY DEBUGGING
-        # for x, y in obstacles_in_front:
-
-        #     self.get_logger().info(
-        #         f"Obstacle: "
-        #         f"{x:.2f} m forward, "
-        #         f"{y:.2f} m lateral"
-        #     )
 
     def transform_point(self, point, transform):
         """
@@ -202,7 +238,7 @@ class CurveDetectionNode(Node):
 
     def publish_centres(self, near, mid, far):
         """
-        Publishes the markers 'near', 'mid' and 'far' into RVIZ
+        Publishes the markers 'near', 'mid' and 'far' into RVIZ. This is the visualization of the centre of the track at different distances in front of the robot
         """
         
         # Creating a marker instance
@@ -244,6 +280,133 @@ class CurveDetectionNode(Node):
 
         self.marker_publisher.publish(point_to_publish)
 
+    def fit_line_onto_obstacle(self, points):
+        """
+        Fits a line onto the points of the highest costmap values in front of the robot
+        """
+        if len(points) < 2:
+            return None
+
+        xs = np.array([p[0] for p in points])
+        ys = np.array([p[1] for p in points])
+
+        m, c = np.polyfit(xs, ys, 1)
+
+        return m, c
+
+    def publish_fitted_linear_line(self, line, x_min = 0.5, x_max = 3.0):
+        """
+        Publishes the fitted line onto RVIZ for visualization
+        """
+
+        if line is None:
+            return
+
+        m, c = line
+
+        # Creating a marker instance
+        line_to_publish = Marker()
+
+        # Defining the characteristics of the point_to_publish
+        line_to_publish.header.frame_id = 'base_link'
+        line_to_publish.header.stamp.sec = 0
+        line_to_publish.header.stamp.nanosec = 0
+
+        line_to_publish.ns = 'fitted_line'
+        line_to_publish.id = 1
+
+        line_to_publish.type = Marker.LINE_STRIP
+        line_to_publish.action = Marker.ADD
+
+        # Size of each point
+        line_to_publish.scale.x = 0.05
+        line_to_publish.scale.y = 0.05
+        line_to_publish.scale.z = 0.05
+
+        # Marker colour 
+        line_to_publish.color.r = 0.0
+        line_to_publish.color.g = 1.0
+        line_to_publish.color.b = 0.0
+        line_to_publish.color.a = 1.0
+
+        # Marker position
+        p1 = Point()
+        p1.x = x_min
+        p1.y = m * x_min + c
+        p1.z = 0.15
+
+        p2 = Point()
+        p2.x = x_max
+        p2.y = m * x_max + c
+        p2.z = 0.15
+
+        line_to_publish.points.append(p1)
+        line_to_publish.points.append(p2)
+
+        self.marker_publisher.publish(line_to_publish)
+        
+    def fit_quadratic_curve_onto_obstacle(self, points):
+        """
+        Fits a quadratic curve onto the points of the highest costmap values in front of the robot
+        """
+        if len(points) < 3:
+            return None
+
+        xs = np.array([p[0] for p in points])
+        ys = np.array([p[1] for p in points])
+
+        coeffs = np.polyfit(xs, ys, 2)
+
+        return coeffs
+    
+    def publish_fitted_quadratic_curve(self, coeffs, x_min=0.5, x_max=3.0, num_points=50):
+        """
+        Publishes the fitted quadratic curve onto RVIZ for visualization
+        """
+
+        if coeffs is None:
+            return
+
+        a, b, c = coeffs
+
+        # Creating a marker instance
+        curve_to_publish = Marker()
+
+        # Defining the characteristics of the point_to_publish
+        curve_to_publish.header.frame_id = 'base_link'
+        curve_to_publish.header.stamp.sec = 0
+        curve_to_publish.header.stamp.nanosec = 0
+
+        curve_to_publish.ns = 'fitted_curve'
+        curve_to_publish.id = 2
+
+        curve_to_publish.type = Marker.LINE_STRIP
+        curve_to_publish.action = Marker.ADD
+
+        # Size of each point
+        curve_to_publish.scale.x = 0.05
+        curve_to_publish.scale.y = 0.05
+        curve_to_publish.scale.z = 0.05
+
+        # Marker colour 
+        curve_to_publish.color.r = 0.0
+        curve_to_publish.color.g = 0.0
+        curve_to_publish.color.b = 1.0
+        curve_to_publish.color.a = 1.0
+
+        # Generate points along the quadratic curve
+        xs = np.linspace(x_min, x_max, num_points)
+        ys = a * xs**2 + b * xs + c
+
+        for x, y in zip(xs, ys):
+            point = Point()
+            point.x = x
+            point.y = y
+            point.z = 0.15
+
+            curve_to_publish.points.append(point)
+
+        self.marker_publisher.publish(curve_to_publish)
 
 if __name__ == '__main__':
     rclpy.init()

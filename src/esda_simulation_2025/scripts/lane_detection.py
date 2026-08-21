@@ -26,7 +26,7 @@ class LaneDetectionNode(Node):
         super().__init__('lane_detection_node')
         
         # Parameters
-        self.declare_parameter('show_visualization', False)
+        self.declare_parameter('show_visualization', True)
         self.declare_parameter('publish_rate', 10.0)
         self.declare_parameter('white_threshold_low', 130)  # Grayscale threshold for white (more lenient)
         self.declare_parameter('white_threshold_high', 255)

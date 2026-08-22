@@ -131,11 +131,33 @@ class SimManager(ctk.CTk):
         )
         self.lane_mode_dropdown.grid(row=0, column=2, padx=10, pady=6, sticky="e")
 
+        # Lane detection visualization dropdown
+        self.lane_visualization = ctk.StringVar(value="Visualization On")
+
+        self.lane_visualization_dropdown = ctk.CTkOptionMenu(
+            self.sim_frame,
+            variable=self.lane_visualization,
+            values=["Visualization On", "Visualization Off"],
+            width=160,
+            fg_color=self.bg_dark,
+            button_color=self.accent_purple,
+            text_color=self.fg_text
+        )
+
+        self.lane_visualization_dropdown.grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            padx=10,
+            pady=(0, 8),
+            sticky="ew"
+        )
+
         self.sim_button = ctk.CTkButton(self.sim_frame, text="2. Launch Simulation", command=self.toggle_sim, font=("Orbitron", 16, "bold"), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
         self.sim_button.grid(row=0, column=3, padx=10, pady=6, sticky="e")
 
         self.lane_detection_button = ctk.CTkButton(self.sim_frame, text="Launch Lane Detection", command=self.toggle_lane_detection, font=("Orbitron", 13, "bold"), fg_color=self.accent_purple, hover_color="#5F27CD", text_color=self.bg_dark)
-        self.lane_detection_button.grid(row=1, column=0, columnspan=4, padx=10, pady=(0, 8), sticky="ew")
+        self.lane_detection_button.grid(row=1, column=2, columnspan=2, padx=10, pady=(0, 8), sticky="ew")
 
         # Remove SLAM Options Section (now merged)
 
@@ -445,11 +467,20 @@ class SimManager(ctk.CTk):
             return
 
         mode = self.lane_detector_mode.get()
+
+        show_visualization = (
+            "true"
+            if self.lane_visualization.get() == "Visualization On"
+            else "false"
+        )
+
         if mode == "FCN":
             model_path = f"{self.workspace_root}/lane-detection-on-rural-roads-master/CS542_Project/Code/FCN_model.h5"
             lane_cmd = (
                 f"ros2 run esda_simulation_2025 lane_detection_FCN.py "
-                f"--ros-args -p fcn_model_path:={model_path}"
+                f"--ros-args "
+                f"-p fcn_model_path:={model_path} "
+                f"-p show_visualization:={show_visualization}"
             )
         elif mode == "TwinLiteNet+":
             repo_path = f"{self.workspace_root}/TwinLiteNetPlus"
@@ -459,9 +490,14 @@ class SimManager(ctk.CTk):
                 f"--ros-args -p twinlite_repo_path:={repo_path} "
                 f"-p twinlite_weight_path:={weight_path} "
                 f"-p twinlite_variant:=nano"
+                f"-p show_visualization:={show_visualization}"
             )
         else:
-            lane_cmd = "ros2 run esda_simulation_2025 lane_detection.py"
+            lane_cmd = (
+                f"ros2 run esda_simulation_2025 lane_detection.py "
+                f"--ros-args "
+                f"-p show_visualization:={show_visualization}"
+            )
 
         self.run_in_terminal("LANE", lane_cmd)
 

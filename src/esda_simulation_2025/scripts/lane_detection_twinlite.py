@@ -65,6 +65,7 @@ class LaneDetectionTwinLiteNode(LaneDetectionNode):
     def __init__(self):
         super().__init__()
 
+        # self.declare_parameter('show_visualization', True)
         # Keep default paths aligned with the cloned repo layout in this workspace
         self.declare_parameter('twinlite_repo_path', 'TwinLiteNetPlus')
         self.declare_parameter('twinlite_weight_path', 'TwinLiteNetPlus/pretrained/nano.pth')
@@ -91,6 +92,8 @@ class LaneDetectionTwinLiteNode(LaneDetectionNode):
         self.twinlite_draw_area = bool(self.get_parameter('twinlite_draw_area').value)
         self.twinlite_overlay_alpha = float(self.get_parameter('twinlite_overlay_alpha').value)
         self.twinlite_max_inference_hz = float(self.get_parameter('twinlite_max_inference_hz').value)
+        # self.show_viz = self.get_parameter('show_visualization').value
+
 
         self.torch = None
         self.twinlite_model = None

@@ -24,6 +24,7 @@ class LaneDetectionFCNNode(LaneDetectionNode):
     def __init__(self):
         super().__init__()
 
+        # self.declare_parameter('show_visualization', True)
         # Keep default path aligned with the cloned repo layout in this workspace
         self.declare_parameter(
             'fcn_model_path',
@@ -49,6 +50,8 @@ class LaneDetectionFCNNode(LaneDetectionNode):
         self.fcn_use_roi = bool(self.get_parameter('fcn_use_roi').value)
         self.fcn_draw_area = bool(self.get_parameter('fcn_draw_area').value)
         self.fcn_overlay_alpha = float(self.get_parameter('fcn_overlay_alpha').value)
+        # self.show_viz = self.get_parameter('show_visualization').value
+
 
         self.tf_module = None
         self.fcn_model = None

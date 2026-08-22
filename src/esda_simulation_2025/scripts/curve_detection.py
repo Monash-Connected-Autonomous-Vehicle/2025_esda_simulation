@@ -160,6 +160,10 @@ class CurveDetectionNode(Node):
         # Fitting a quadratic curve onto the obstacles to determine the curvature of the track
         all_points = obstacles_in_front
         quadratic_curve = self.fit_quadratic_curve_onto_obstacle(all_points)
+
+        left_quadratic = self.fit_quadratic_curve_onto_obstacle(left_points)
+        right_quadratic = self.fit_quadratic_curve_onto_obstacle(right_points)
+
         self.publish_fitted_quadratic_curve(quadratic_curve)
 
         self.get_logger().info(

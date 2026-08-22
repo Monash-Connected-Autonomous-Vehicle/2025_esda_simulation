@@ -22,8 +22,8 @@ class CurveDetectionNode(Node):
         super().__init__('curve_detection')
 
         # 1. Lookahead distance parameters
-        self.declare_parameter('curve_lookahead_distant', 3.0) # Lookahead distance in metres
-        self.declare_parameter('curve_width', 2.0)
+        self.declare_parameter('curve_lookahead_distant', 4.5) # Lookahead distance in metres
+        self.declare_parameter('curve_width', 2.5)
 
         # Getting the distance parameters
         self.curve_lookahead_distant = (
@@ -109,11 +109,11 @@ class CurveDetectionNode(Node):
                 obstacles_in_front.append((x_base, y_base))
 
         # Finding the centre for each distance band
-        near = self.get_band_centre(obstacles_in_front, 0.5, 1.0)
+        near = self.get_band_centre(obstacles_in_front, 0.5, 1.25)
 
-        mid = self.get_band_centre(obstacles_in_front, 1.0, 2.0)
+        mid = self.get_band_centre(obstacles_in_front, 1.0, 2.5)
 
-        far = self.get_band_centre(obstacles_in_front, 2.0, 3.0)
+        far = self.get_band_centre(obstacles_in_front, 2.0, 4.0)
 
         heading_near = np.arctan2(mid[1] - near[1], mid[0] - near[0]) if near and mid else None
         heading_far = np.arctan2(far[1] - mid[1], far[0] - mid[0]) if near and far else None
@@ -165,6 +165,9 @@ class CurveDetectionNode(Node):
         right_quadratic = self.fit_quadratic_curve_onto_obstacle(right_points)
 
         self.publish_fitted_quadratic_curve(quadratic_curve)
+
+        self.publish_fitted_quadratic_curve(left_quadratic)
+        self.publish_fitted_quadratic_curve(right_quadratic)
 
         self.get_logger().info(
             f"Obstacles in front: "

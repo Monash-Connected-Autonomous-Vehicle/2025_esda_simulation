@@ -159,6 +159,8 @@ class WaypointNavigator(Node):
         self.final_goal.pose.position.z = 0.0
         self.final_goal.pose.orientation.w = 1.0
 
+        self.enter_recovery_mode = False
+
     def send_goal(self, goal_pose: PoseStamped):
         goal_msg = NavigateToPose.Goal()
 
@@ -308,7 +310,6 @@ class WaypointNavigator(Node):
                 f"Failed to obtain navigation result: {ex}"
             )
             
-
             return
 
         if status == 4:  # STATUS_SUCCEEDED
@@ -331,6 +332,8 @@ class WaypointNavigator(Node):
 
             # Do not set this to False.
             # The robot did not successfully reach the waypoint.
+            self.enter_recovery_mode = True
+            self.recovery_callback(True)
             self.goal_in_progress = True
 
         self.goal_in_progress = False
@@ -535,7 +538,7 @@ class WaypointNavigator(Node):
         
         # This allows the robot to continue exploring without selecting a goal
         # several metres into completely unobserved space.
-        max_unknown_distance = 1.0
+        max_unknown_distance = 0.8
         unknown_distance = 0.0
 
         step_size = resolution
@@ -1357,7 +1360,7 @@ class WaypointNavigator(Node):
                 cell_value = self.map_matrix[grid_y, grid_x]
 
                 # Treat occupied cells as obstacles.
-                if cell_value >= 50 or cell_value == -1:
+                if cell_value >= 50:
                     obstacle_world_x = (
                         origin_x + (grid_x + 0.5) * resolution
                     )
@@ -1658,11 +1661,21 @@ class WaypointNavigator(Node):
                     candidate_y
                 )
 
+                self.get_logger().warn(
+                    f"RECOVERY CANDIDATE | "
+                    f"forward={forward_distance:.2f}, "
+                    f"left={left_offset:.2f}, "
+                    f"goal_clearance={goal_clearance:.2f}, "
+                    f"path_clearance={path_clearance:.2f}"
+                )
+
+
+
                 # Hard safety rejection
                 if goal_clearance < 1.0:
                     continue
 
-                if path_clearance < 0.8:
+                if path_clearance < 0.5:
                     continue
 
                 # Prefer:
@@ -1713,7 +1726,12 @@ class WaypointNavigator(Node):
 
         return goal
 
-    
+    def recovery_callback(self, msg: bool):
+        self.get_logger().warn(
+            f"Enter recovery mode: {msg}"
+            f"Test"
+        )
+        # self.enter_recovery_mode = msg.data
     
 if __name__ == '__main__':
     # import rclpy

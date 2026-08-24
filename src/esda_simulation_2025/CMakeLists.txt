@@ -62,6 +62,7 @@ install(PROGRAMS
   scripts/waypoint_navigator_recommendation.py
   scripts/wavefront_frontier_exploration.py
   scripts/curve_detection.py
+  scripts/throttle_publisher.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

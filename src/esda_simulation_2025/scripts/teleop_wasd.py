@@ -53,6 +53,7 @@ def main():
     rclpy.init()
     node = rclpy.create_node('teleop_wasd')
     pub = node.create_publisher(Twist, '/cmd_vel', 10)
+    
 
     speed = 2
     turn = 2

@@ -63,6 +63,7 @@ install(PROGRAMS
   scripts/wavefront_frontier_exploration.py
   scripts/curve_detection.py
   scripts/throttle_publisher.py
+  scripts/cmd_vel_odometry.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -138,7 +138,7 @@ controller_server:
       vx_std: 0.15
       vy_std: 0.0
       wz_std: 0.3
-      vx_max: 0.4
+      vx_max: 1.0
       vx_min: 0.0
       vy_max: 0.0
       wz_max: 1.2
@@ -522,7 +522,7 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.5, 0.0, 2.0]
+    max_velocity: [1.0, 0.0, 2.0]
     min_velocity: [-0.5, 0.0, -2.0]
     max_accel: [2.5, 0.0, 3.2]
     max_decel: [-2.5, 0.0, -3.2]
@@ -541,7 +541,7 @@ collision_monitor:
     cmd_vel_in_topic: "cmd_vel_smoothed"
     cmd_vel_out_topic: "cmd_vel"
     state_topic: "collision_monitor_state"
-    transform_tolerance: 0.5
+    transform_tolerance: 0.9
     source_timeout: 1.0
     base_shift_correction: True
     stop_pub_timeout: 2.0

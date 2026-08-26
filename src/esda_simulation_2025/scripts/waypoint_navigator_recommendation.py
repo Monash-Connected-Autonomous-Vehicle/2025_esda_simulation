@@ -2133,7 +2133,17 @@ class WaypointNavigator(Node):
             self.enter_recovery_mode = True
 
     def send_far_goal(self, goal_pose: PoseStamped):
-        pass 
+        """
+        Send a goal that is far away from the current position.
+        Only used when the robot is completely stuck and needs to move to a distant location.
+        """
+
+        goal_pose.header.frame_id = self.frame_id
+        goal_pose.header.stamp = self.get_clock().now().to_msg()
+
+        
+
+        pass
 
 if __name__ == '__main__':
     # import rclpy

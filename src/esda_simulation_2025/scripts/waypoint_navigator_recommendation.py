@@ -1686,10 +1686,10 @@ class WaypointNavigator(Node):
 
 
                 # Hard safety rejection
-                if goal_clearance < 1.0:
+                if goal_clearance < 0.7:
                     continue
 
-                if path_clearance < 0.5:
+                if path_clearance < 0.2:
                     continue
 
                 # Prefer:
@@ -2131,6 +2131,9 @@ class WaypointNavigator(Node):
             )
 
             self.enter_recovery_mode = True
+
+    def send_far_goal(self, goal_pose: PoseStamped):
+        pass 
 
 if __name__ == '__main__':
     # import rclpy

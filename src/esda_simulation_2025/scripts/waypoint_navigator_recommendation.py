@@ -319,6 +319,7 @@ class WaypointNavigator(Node):
             )
 
             # Only now allow the next waypoint to be calculated.
+            self.enter_recovery_mode = False
             self.goal_in_progress = False
             self.latest_forward_goal = None
             self.last_sent_goal = None
@@ -330,15 +331,14 @@ class WaypointNavigator(Node):
                 f"New waypoint generation remains locked."
             )
 
-            # Do not set this to False.
-            # The robot did not successfully reach the waypoint.
-            self.enter_recovery_mode = True
-            self.recovery_callback(True)
-            self.goal_in_progress = True
+            # The failed Nav2 goal is finished.
+            self.goal_in_progress = False
+            self.latest_forward_goal = None
+            self.last_sent_goal = None
 
-        self.goal_in_progress = False
-        self.latest_forward_goal = None
-        self.last_sent_goal = None
+            # Recovery now owns the robot. It will attempt to get the robot back on track.
+            self.enter_recovery_mode = True
+            self.robot_recovery()
 
     def send_latest_forward_goal(self):
         """
@@ -349,6 +349,12 @@ class WaypointNavigator(Node):
         - no previous goal is currently being submitted;
         - the waypoint has moved far enough from the last sent goal.
         """
+        if self.enter_recovery_mode:
+            self.get_logger().warn(
+                "Waypoint sending locked: "
+                "robot is in recovery mode."
+            )
+            return
 
         if not self.initial_forward_goal_sent:
             self.get_logger().debug("Initial forward goal not sent yet.")
@@ -405,7 +411,15 @@ class WaypointNavigator(Node):
         self.map_matrix = self.raw_grid.reshape((height, width))
 
     def update_forward_goal(self):
-        
+        if self.enter_recovery_mode:
+            self.get_logger().warn(
+                "Waypoint generation locked: "
+                "robot is in recovery mode."
+            )
+
+            return
+
+        # If the robot is still navigating to a previous waypoint, do not generate a new one.
         if self.goal_in_progress:
             if self.last_sent_goal is not None:
                 goal_x = self.last_sent_goal.pose.position.x
@@ -1726,13 +1740,47 @@ class WaypointNavigator(Node):
 
         return goal
 
-    def recovery_callback(self, msg: bool):
-        self.get_logger().warn(
-            f"Enter recovery mode: {msg}"
-            f"Test"
-        )
-        # self.enter_recovery_mode = msg.data
     
+
+    def robot_recovery(self):
+        """
+        Attempts to look around to find a better path when the robot is stuck or in a tight spot.
+        """
+
+
+        self.navigator.spin(spin_dist=2.0 * math.pi, time_allowance= 50)
+
+        self.recovery_timer = self.create_timer(
+            0.2,
+            self.check_recovery_complete
+        )
+
+    def check_recovery_complete(self):
+        if not self.navigator.isTaskComplete():
+            return
+
+        result = self.navigator.getResult()
+
+        self.recovery_timer.cancel()
+
+        if result == TaskResult.SUCCEEDED:
+            self.get_logger().warn(
+                "Recovery spin succeeded. Resuming navigation."
+            )
+
+            self.enter_recovery_mode = False
+            self.goal_in_progress = False
+            self.latest_forward_goal = None
+            self.last_sent_goal = None
+
+        else:
+            self.get_logger().error(
+                f"Recovery spin failed. Result: {result}"
+            )
+
+            self.enter_recovery_mode = True
+
+
 if __name__ == '__main__':
     # import rclpy
     # from rclpy.node import Node

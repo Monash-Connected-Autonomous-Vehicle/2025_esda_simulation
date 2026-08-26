@@ -1744,16 +1744,368 @@ class WaypointNavigator(Node):
 
     def robot_recovery(self):
         """
-        Attempts to look around to find a better path when the robot is stuck or in a tight spot.
+        Search the front half of the robot for a recovery goal that:
+        1. is locally safe,
+        2. is in front of the robot,
+        3. can actually be planned to by Nav2.
         """
 
+        self.get_logger().warn(
+            "Recovery mode: searching for a reachable front-space goal."
+        )
 
-        self.navigator.spin(spin_dist=2.0 * math.pi, time_allowance= 50)
+        recovery_goal = self.find_front_recovery_goal()
+
+        if recovery_goal is None:
+            self.get_logger().error(
+                "No reachable recovery goal found."
+            )
+            self.enter_recovery_mode = True
+            return
+
+        self.get_logger().warn(
+            f"Sending recovery goal: "
+            f"x={recovery_goal.pose.position.x:.2f}, "
+            f"y={recovery_goal.pose.position.y:.2f}"
+        )
+
+        self.navigator.goToPose(recovery_goal)
 
         self.recovery_timer = self.create_timer(
             0.2,
             self.check_recovery_complete
         )
+
+
+    def find_front_recovery_goal(self):
+        if self.map_data is None:
+            return None
+
+        # ----------------------------------------------------------
+        # Get the CURRENT robot pose
+        # ----------------------------------------------------------
+
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.frame_id,
+                self.robot_frame,
+                rclpy.time.Time()
+            )
+
+        except TransformException as ex:
+            self.get_logger().warn(
+                f"Could not get current robot pose for recovery: {ex}"
+            )
+            return None
+
+        self.robot_x = transform.transform.translation.x
+        self.robot_y = transform.transform.translation.y
+
+        qx = transform.transform.rotation.x
+        qy = transform.transform.rotation.y
+        qz = transform.transform.rotation.z
+        qw = transform.transform.rotation.w
+
+        self.robot_yaw = math.atan2(
+            2.0 * (qw * qz + qx * qy),
+            1.0 - 2.0 * (qy * qy + qz * qz)
+        )
+
+        self.current_pose = (
+            self.robot_x,
+            self.robot_y,
+            self.robot_yaw
+        )
+
+        # ----------------------------------------------------------
+        # Current start pose for Nav2 planner
+        # ----------------------------------------------------------
+
+        start_pose = PoseStamped()
+
+        start_pose.header.frame_id = self.frame_id
+        start_pose.header.stamp = (
+            self.get_clock().now().to_msg()
+        )
+
+        start_pose.pose.position.x = self.robot_x
+        start_pose.pose.position.y = self.robot_y
+        start_pose.pose.position.z = 0.0
+
+        start_pose.pose.orientation.x = 0.0
+        start_pose.pose.orientation.y = 0.0
+        start_pose.pose.orientation.z = math.sin(
+            self.robot_yaw / 2.0
+        )
+        start_pose.pose.orientation.w = math.cos(
+            self.robot_yaw / 2.0
+        )
+
+        # ----------------------------------------------------------
+        # Map information
+        # ----------------------------------------------------------
+
+        msg = self.map_data
+
+        width = msg.info.width
+        height = msg.info.height
+        resolution = msg.info.resolution
+        origin_x = msg.info.origin.position.x
+        origin_y = msg.info.origin.position.y
+
+        # ----------------------------------------------------------
+        # Generate candidate goals
+        # ----------------------------------------------------------
+
+        candidates = []
+
+        search_distances = [
+            0.8,
+            1.0,
+            1.2,
+            1.5
+        ]
+
+        search_angles_deg = [
+            -75,
+            -60,
+            -45,
+            -30,
+            -15,
+            0,
+            15,
+            30,
+            45,
+            60,
+            75
+        ]
+
+        forward_x = math.cos(self.robot_yaw)
+        forward_y = math.sin(self.robot_yaw)
+
+        for distance in search_distances:
+            for angle_deg in search_angles_deg:
+
+                angle_offset = math.radians(angle_deg)
+
+                candidate_yaw = (
+                    self.robot_yaw
+                    + angle_offset
+                )
+
+                candidate_x = (
+                    self.robot_x
+                    + distance * math.cos(candidate_yaw)
+                )
+
+                candidate_y = (
+                    self.robot_y
+                    + distance * math.sin(candidate_yaw)
+                )
+
+                # --------------------------------------------------
+                # Grid check
+                # --------------------------------------------------
+
+                grid_x = int(
+                    (candidate_x - origin_x) / resolution
+                )
+
+                grid_y = int(
+                    (candidate_y - origin_y) / resolution
+                )
+
+                if not (
+                    0 <= grid_x < width
+                    and 0 <= grid_y < height
+                ):
+                    continue
+
+                cell_value = self.map_matrix[
+                    grid_y,
+                    grid_x
+                ]
+
+                if cell_value >= 50:
+                    continue
+
+                # --------------------------------------------------
+                # Make sure it is ACTUALLY in front
+                # --------------------------------------------------
+
+                dx = candidate_x - self.robot_x
+                dy = candidate_y - self.robot_y
+
+                forward_progress = (
+                    dx * forward_x
+                    + dy * forward_y
+                )
+
+                if forward_progress <= 0.20:
+                    continue
+
+                # --------------------------------------------------
+                # Your own safety checks
+                # --------------------------------------------------
+
+                goal_clearance = self.get_map_clearance(
+                    candidate_x,
+                    candidate_y
+                )
+
+                path_clearance = self.get_path_clearance(
+                    self.robot_x,
+                    self.robot_y,
+                    candidate_x,
+                    candidate_y
+                )
+
+                if goal_clearance < 0.8:
+                    continue
+
+                if path_clearance < 0.6:
+                    continue
+
+                # --------------------------------------------------
+                # Candidate scoring
+                # --------------------------------------------------
+
+                clearance_score = (
+                    4.0 * goal_clearance
+                    + 5.0 * path_clearance
+                )
+
+                forward_score = (
+                    8.0 * forward_progress
+                )
+
+                angle_penalty = (
+                    0.05 * abs(angle_deg)
+                )
+
+                unknown_penalty = 0.0
+
+                if cell_value == -1:
+                    unknown_penalty = 2.0
+
+                score = (
+                    clearance_score
+                    + forward_score
+                    - angle_penalty
+                    - unknown_penalty
+                )
+
+                goal = PoseStamped()
+
+                goal.header.frame_id = self.frame_id
+                goal.header.stamp = (
+                    self.get_clock().now().to_msg()
+                )
+
+                goal.pose.position.x = candidate_x
+                goal.pose.position.y = candidate_y
+                goal.pose.position.z = 0.0
+
+                goal.pose.orientation.x = 0.0
+                goal.pose.orientation.y = 0.0
+                goal.pose.orientation.z = math.sin(
+                    candidate_yaw / 2.0
+                )
+                goal.pose.orientation.w = math.cos(
+                    candidate_yaw / 2.0
+                )
+
+                candidates.append(
+                    (
+                        score,
+                        goal,
+                        angle_deg,
+                        distance,
+                        goal_clearance,
+                        path_clearance,
+                        forward_progress
+                    )
+                )
+
+        if not candidates:
+            self.get_logger().warn(
+                "No locally-safe recovery candidates found."
+            )
+            return None
+
+        # Best-scoring candidates first.
+        candidates.sort(
+            key=lambda item: item[0],
+            reverse=True
+        )
+
+        # ----------------------------------------------------------
+        # Ask NAV2 if each candidate is actually reachable
+        # ----------------------------------------------------------
+
+        for (
+            score,
+            goal,
+            angle_deg,
+            distance,
+            goal_clearance,
+            path_clearance,
+            forward_progress
+        ) in candidates:
+
+            self.get_logger().warn(
+                f"CHECKING NAV2 PATH | "
+                f"angle={angle_deg:+.0f} deg, "
+                f"distance={distance:.2f}, "
+                f"score={score:.2f}"
+            )
+
+            try:
+                path = self.navigator.getPath(
+                    start_pose,
+                    goal
+                )
+
+            except Exception as ex:
+                self.get_logger().warn(
+                    f"Nav2 path check failed: {ex}"
+                )
+                continue
+
+            # No global path exists.
+            if path is None:
+                self.get_logger().warn(
+                    f"Rejected recovery candidate: "
+                    f"Nav2 cannot plan to it."
+                )
+                continue
+
+            # Optionally also reject an empty path.
+            if len(path.poses) == 0:
+                self.get_logger().warn(
+                    "Rejected recovery candidate: "
+                    "Nav2 returned an empty path."
+                )
+                continue
+
+            self.get_logger().warn(
+                f"VALID RECOVERY GOAL FOUND | "
+                f"angle={angle_deg:+.0f} deg, "
+                f"distance={distance:.2f} m, "
+                f"forward={forward_progress:.2f} m, "
+                f"goal_clearance={goal_clearance:.2f}, "
+                f"path_clearance={path_clearance:.2f}, "
+                f"path_points={len(path.poses)}"
+            )
+
+            return goal
+
+        self.get_logger().error(
+            "All recovery candidates were rejected by Nav2 planner."
+        )
+
+        return None
+
 
     def check_recovery_complete(self):
         if not self.navigator.isTaskComplete():
@@ -1765,7 +2117,7 @@ class WaypointNavigator(Node):
 
         if result == TaskResult.SUCCEEDED:
             self.get_logger().warn(
-                "Recovery spin succeeded. Resuming navigation."
+                "Recovery movement succeeded. Resuming normal navigation."
             )
 
             self.enter_recovery_mode = False
@@ -1775,11 +2127,10 @@ class WaypointNavigator(Node):
 
         else:
             self.get_logger().error(
-                f"Recovery spin failed. Result: {result}"
+                f"Recovery movement failed. Result: {result}"
             )
 
             self.enter_recovery_mode = True
-
 
 if __name__ == '__main__':
     # import rclpy

@@ -158,6 +158,22 @@ def generate_launch_description():
     
     # --- 7) Static TF publishers are handled by robot_state_publisher ---
     # The laser_frame → my_robot_1/base_link/laser_frame transform comes from URDF
+    ekf_config_path = os.path.join(
+        get_package_share_directory('esda_simulation_2025'),
+        'config',
+        'ekf.yaml'
+    )
+
+
+    # 2. Define the node execution parameters
+    ekf_node = Node(
+        package='robot_localization',
+        executable='ekf_node',
+        name='ekf_filter_node',
+        output='screen',
+        parameters=[ekf_config_path] # This maps your yaml settings into the node
+    )
+
 
     return LaunchDescription([
       DeclareLaunchArgument('use_sim_time',    default_value='true'),
@@ -176,4 +192,5 @@ def generate_launch_description():
       spawn_entity,
       joint_broad_spawner,
       diff_drive_spawner,
+      ekf_node
     ])

@@ -144,7 +144,7 @@ controller_server:
       wz_max: 1.2
       iteration_count: 1
       prune_distance: 2.5
-      transform_tolerance: 0.5
+      transform_tolerance: 1.0
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"

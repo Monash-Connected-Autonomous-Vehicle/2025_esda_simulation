@@ -1740,8 +1740,6 @@ class WaypointNavigator(Node):
 
         return goal
 
-    
-
     def robot_recovery(self):
         """
         Search the front half of the robot for a recovery goal that:
@@ -1776,6 +1774,8 @@ class WaypointNavigator(Node):
             self.check_recovery_complete
         )
 
+    def retry_recovery_goal(self):
+        pass
 
     def find_front_recovery_goal(self):
         if self.map_data is None:
@@ -2140,9 +2140,11 @@ class WaypointNavigator(Node):
 
         goal_pose.header.frame_id = self.frame_id
         goal_pose.header.stamp = self.get_clock().now().to_msg()
+        goal_pose.pose.position.x = 0.0
+        goal_pose.pose.position.y = 0.0
+
 
         
-
         pass
 
 if __name__ == '__main__':

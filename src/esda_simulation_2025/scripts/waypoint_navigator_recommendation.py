@@ -967,7 +967,7 @@ class WaypointNavigator(Node):
             lookahead_distances = [0.40, 0.60, 0.80]
 
         else:
-            lookahead_distances = [0.60, 0.90, 1.20]
+            lookahead_distances = [1.60, 1.90, 2.20]
 
         # ----------------------------------------------------------
         # 3. Choose permitted lateral offsets

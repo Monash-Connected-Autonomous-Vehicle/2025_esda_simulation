@@ -10,6 +10,7 @@ from geometry_msgs.msg import PoseStamped, Twist, PointStamped
 from nav2_msgs.action import NavigateToPose, FollowWaypoints
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from nav_msgs.msg import OccupancyGrid
+from nav2_msgs.msg import Costmap
 from visualization_msgs.msg import Marker, MarkerArray
 from sensor_msgs import msg
 from tf2_ros import Buffer, TransformListener, TransformException
@@ -159,8 +160,26 @@ class WaypointNavigator(Node):
         self.final_goal.pose.position.z = 0.0
         self.final_goal.pose.orientation.w = 1.0
 
+        # Recovery parameters
         self.enter_recovery_mode = False
 
+        # Time at which we first failed to generate normal waypoint 
+        self.no_candidate_since = None
+
+        # How long to tolerate continuous failure to generate a normal waypoint before entering recovery mode
+        self.no_candidate_timeout = 20.0 # Seconds
+
+        # Prevent repeatedly firing far goal attempts
+        self.far_goal_in_progress = False
+
+        # Subscribe to the global costmap
+        self.global_costmap_subscriber = self.create_subscription(
+            Costmap,
+            '/global_costmap/costmap',
+            self.global_costmap_callback,
+            10
+        )
+	
     def send_goal(self, goal_pose: PoseStamped):
         goal_msg = NavigateToPose.Goal()
 
@@ -2146,6 +2165,58 @@ class WaypointNavigator(Node):
 
         
         pass
+    
+    # ======================================================
+    # Reset the timer for when no valid candidates are found
+    # ======================================================
+    def reset_no_candidate_timer(self):
+        self.no_candidate_since = self.get_clock().now()
+
+    def handle_no_candidate_timeout(self):
+        if self.no_candidate_since is None:
+            return
+
+        elapsed_time = (
+            self.get_clock().now() - self.no_candidate_since
+        ).nanoseconds / 1e9  # Convert to seconds
+
+        if elapsed_time >= self.no_candidate_timeout:
+            self.get_logger().warn(
+                "No valid candidates found for an extended period. "
+                "Entering recovery mode."
+            )
+            self.enter_recovery_mode = True
+            self.no_candidate_since = None  # Reset the timer
+
+    
+    def no_candidate_found_recovery_waypoint(self):
+        # Getting the dimensions of the map
+        width = self.global_costmap_data.info.width
+        height = self.global_costmap_data.info.height
+        resolution = self.global_costmap_data.info.resolution
+        origin_x = self.global_costmap_data.info.origin.position.x
+        origin_y = self.global_costmap_data.info.origin.position.y
+        grid = np.array(self.map_data.data).reshape((height, width))
+
+        free_indices = np.argwhere(grid == 0)
+
+        if free_indices.size == 0:
+            self.get_logger().error("No free space found in the map for recovery.")
+            return None
+        
+        # Randomly select a free cell in the forward half of the map
+
+        
+
+    def global_costmap_callback(self, msg: OccupancyGrid):
+        # Accessing map data
+        width = msg.info.width
+        height = msg.info.height
+        resolution = msg.info.resolution
+
+        # Acquiring the map data
+        self.global_costmap_data = msg.data
+   	
 
 if __name__ == '__main__':
     # import rclpy
